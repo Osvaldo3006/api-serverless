@@ -1,5 +1,3 @@
-data "aws_caller_identity" "current" {}
-
 locals {
   lambda_assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -13,7 +11,8 @@ locals {
       }
     ]
   })
-  basic_execution_policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+  # Covers CloudWatch Logs and the ENI management a Lambda in a VPC needs.
+  vpc_access_policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
 resource "aws_iam_policy" "s3" {
@@ -34,42 +33,6 @@ resource "aws_iam_policy" "s3" {
           var.bucket_arn,
           "${var.bucket_arn}/*"
         ]
-      }
-    ]
-  })
-}
-
-resource "aws_iam_policy" "aurora" {
-  name        = "${var.name_prefix}-aurora"
-  description = "Policy to access aurora instance"
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect   = "Allow"
-        Action   = ["rds-db:connect"]
-        Resource = ["arn:aws:rds-db:${var.region}:${data.aws_caller_identity.current.account_id}:dbuser:${var.cluster_id}/${var.master_username}"]
-      }
-    ]
-  })
-}
-
-resource "aws_iam_policy" "eni" {
-  name        = "${var.name_prefix}-eni"
-  description = "Policy to access EC2 ENI in VPC"
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "ec2:CreateNetworkInterface",
-          "ec2:DescribeNetworkInterfaces",
-          "ec2:DeleteNetworkInterface"
-        ]
-        Resource = "*"
       }
     ]
   })
@@ -125,11 +88,9 @@ resource "aws_iam_role" "api" {
 
 resource "aws_iam_role_policy_attachment" "api" {
   for_each = {
-    basic  = local.basic_execution_policy_arn
-    s3     = aws_iam_policy.s3.arn
-    aurora = aws_iam_policy.aurora.arn
-    eni    = aws_iam_policy.eni.arn
-    secret = aws_iam_policy.api_secret.arn
+    vpc_access = local.vpc_access_policy_arn
+    s3         = aws_iam_policy.s3.arn
+    secret     = aws_iam_policy.api_secret.arn
   }
 
   role       = aws_iam_role.api.name
@@ -143,9 +104,8 @@ resource "aws_iam_role" "migrator" {
 
 resource "aws_iam_role_policy_attachment" "migrator" {
   for_each = {
-    basic   = local.basic_execution_policy_arn
-    eni     = aws_iam_policy.eni.arn
-    secrets = aws_iam_policy.migrator_secrets.arn
+    vpc_access = local.vpc_access_policy_arn
+    secrets    = aws_iam_policy.migrator_secrets.arn
   }
 
   role       = aws_iam_role.migrator.name

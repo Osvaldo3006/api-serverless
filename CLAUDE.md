@@ -88,7 +88,6 @@ Consequences:
 
 Done one at a time, each only after the user approves it. Remove items from this list as they merge.
 
-- **D1:** remove the unused `aws_iam_policy.aurora` and replace the custom ENI policy with `AWSLambdaVPCAccessExecutionRole`.
 - **D2:** set `skip_final_snapshot` and `force_destroy` per environment.
 - **D3:** add environment `outputs.tf`, `terraform.tfvars.example`, and a log group with retention.
 - **D4:** migrate to AWS SDK v3, replace `body-parser` with `express.json()`, and use a UTC timezone in Sequelize.

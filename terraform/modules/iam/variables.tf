@@ -3,23 +3,8 @@ variable "name_prefix" {
   type        = string
 }
 
-variable "region" {
-  description = "AWS region."
-  type        = string
-}
-
 variable "bucket_arn" {
   description = "ARN of the images bucket."
-  type        = string
-}
-
-variable "cluster_id" {
-  description = "ID of the Aurora cluster."
-  type        = string
-}
-
-variable "master_username" {
-  description = "Master username of the Aurora cluster."
   type        = string
 }
 

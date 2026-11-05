@@ -34,10 +34,7 @@ module "iam" {
   source = "../../modules/iam"
 
   name_prefix       = local.name_prefix
-  region            = var.region
   bucket_arn        = module.storage.bucket_arn
-  cluster_id        = module.database.cluster_id
-  master_username   = module.database.master_username
   master_secret_arn = module.database.master_secret_arn
   app_secret_arn    = module.database.app_secret_arn
   kms_key_arn       = module.database.kms_key_arn

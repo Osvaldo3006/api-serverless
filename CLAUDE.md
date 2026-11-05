@@ -29,7 +29,7 @@ npx jest tests/unit/authenticate.test.js      # one file
 npx jest tests/unit -t "accepts the password" # tests matching a name
 ```
 
-Copy `.env.example` to `.env` for local runs. Integration tests connect with `DB_USERNAME`, which must be able to create users and grant privileges, because they exercise `provisionAppUser`. S3 is mocked in those tests.
+Copy `.env.example` to `.env` for local runs. Locally, `npm run migrate` only applies migrations: it creates the API database user only when `APP_SECRET_ID` is set, and that variable isn't in `.env.example`. Integration tests connect with `DB_USERNAME`, which must be able to create users and grant privileges, because they exercise `provisionAppUser`. S3 is mocked in those tests.
 
 Terraform (1.11 or later) runs from `terraform/environments/<env>` or `terraform/bootstrap`:
 
@@ -55,8 +55,8 @@ Compress-Archive -Force -Path index.js, migrate.js, package.json, src, migration
 
 Request flow: `index.js` (`serverless-http` when `ENVIRONMENT=lambda`, otherwise `app.listen`) → `src/app.js` → `src/routes/index.js` → middleware → controllers → repositories → Sequelize models.
 
-- **Routes are the source of truth for the API.** They are mounted at `/`, with no `/v1` prefix. The endpoint list in `README.md` is out of date. Each path also needs a `router.all(..., methodNotAllowed)` entry so unsupported verbs return 405 instead of 404.
-- **Auth is HTTP Basic, checked on every request** against the bcrypt hash in the database. `authenticate` sets `req.user`. Product and image routes then use `requireOwnedProduct(message)` for ownership checks.
+- **Routes are the source of truth for the API.** They are mounted at `/`, with no `/v1` prefix. The endpoint list in `README.md` is out of date. Each path also needs a `router.all(..., methodNotAllowed)` entry so unsupported verbs return 405 instead of 404. Order matters: real routes come first, then the 405 entries, then the `router.all("*")` 404 catch-all. A route registered after the catch-all is never reached.
+- **Auth is HTTP Basic, checked on each request** against the bcrypt hash in the database (no sessions or tokens). Public routes: `GET /healthz`, `POST /user`, `GET /product/:productId`. `authenticate` sets `req.user`. Product and image routes then use `requireOwnedProduct(message)` for ownership checks.
 - **Errors:** wrap async handlers in `asyncHandler` so failures reach `middleware/errorHandler.js`, which maps them to the `{ Status, Message }` response shape.
 - **Lazy, cached database access:** `getSequelize()` and `getModels()` cache a promise across warm Lambda invocations and clear it on failure so the next request retries. Importing `src/app` doesn't touch the database, which is why unit tests can run by mocking repositories with `jest.mock`.
 - **Credentials:** `resolveCredentials` uses Secrets Manager when `SECRET_ID` is set, otherwise `DB_USERNAME`/`DB_PASSWORD`.

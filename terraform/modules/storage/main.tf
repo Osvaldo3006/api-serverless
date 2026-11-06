@@ -5,7 +5,17 @@ resource "random_id" "bucket_suffix" {
 
 resource "aws_s3_bucket" "images" {
   bucket        = "${var.name_prefix}-images-${random_id.bucket_suffix.hex}"
-  force_destroy = true
+  force_destroy = var.force_destroy
+}
+
+# Overwritten or deleted images keep their previous version, so they can be
+# recovered.
+resource "aws_s3_bucket_versioning" "images" {
+  bucket = aws_s3_bucket.images.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
 }
 
 resource "aws_s3_bucket_public_access_block" "images" {
@@ -40,6 +50,21 @@ resource "aws_s3_bucket_lifecycle_configuration" "images" {
       storage_class = "STANDARD_IA"
     }
   }
+
+  # Previous versions are only kept long enough to recover from a mistake.
+  rule {
+    id     = "expire_noncurrent_versions"
+    status = "Enabled"
+
+    filter {}
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+
+  # A lifecycle rule for noncurrent versions needs versioning to be enabled first.
+  depends_on = [aws_s3_bucket_versioning.images]
 }
 
 # Lives here, not in the network module, because it needs the bucket ARN.

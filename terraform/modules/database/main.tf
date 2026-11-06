@@ -61,7 +61,10 @@ resource "aws_rds_cluster" "aurora" {
   manage_master_user_password     = true
   storage_encrypted               = true
   master_user_secret_kms_key_id   = aws_kms_key.aurora.key_id
-  skip_final_snapshot             = true
+  deletion_protection             = var.deletion_protection
+  backup_retention_period         = var.backup_retention_period
+  skip_final_snapshot             = var.skip_final_snapshot
+  final_snapshot_identifier       = var.skip_final_snapshot ? null : "${var.name_prefix}-aurora-final"
 
   serverlessv2_scaling_configuration {
     max_capacity = 1.0

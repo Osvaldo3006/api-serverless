@@ -91,10 +91,9 @@ Done one at a time, in the order listed, each only after the user approves it. R
 
 The goal is a portfolio project that shows good security, infrastructure structure and network design without overengineering. Hardening comes first, so CI scanners and the README describe the final state.
 
-- **D4, per-environment settings:** set `skip_final_snapshot`, `force_destroy`, `deletion_protection` and backup retention per environment. `prod` keeps its data, and `dev` stays destroyable.
 - **D5, observability and structure:**
   - Add log groups with retention for both Lambdas, and API Gateway access logs.
-  - Add `default_tags` (project, environment) to the provider in both environments.
+  - Add `default_tags` (project, environment) to the provider in both environments, and `copy_tags_to_snapshot` on the Aurora cluster so snapshots inherit them.
   - Add environment `outputs.tf` and `terraform.tfvars.example`.
 - **D6, application dependencies:** migrate to AWS SDK v3, replace `body-parser` with `express.json()`, and use a UTC timezone in Sequelize. It comes before CI so `npm audit` doesn't fail on the deprecated SDK.
 - **D7, CI with GitHub Actions and OIDC:** no stored AWS keys. Run `terraform fmt -check` and `validate`, an IaC security scanner (Checkov or Trivy), `npm audit` and the unit tests. `.github/workflows` is currently empty.

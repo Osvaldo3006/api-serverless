@@ -106,5 +106,6 @@ The goal is a portfolio project that shows good security, infrastructure structu
 - **D8, README rewrite:**
   - Fix the outdated endpoint list and keep credit to the original author.
   - Add the architecture diagram and a short section on security decisions.
+  - Explain that the throttling limits are placeholders, not based on measured traffic, and are global to the stage rather than per client.
   - List what was left out on purpose as next steps for real production: NAT Gateway, WAF, Cognito, automatic secret rotation, multi-region, VPC Flow Logs and X-Ray.
 - **Open question:** whether to add `UNIQUE` on `sku`, which has the same race condition as `username`.

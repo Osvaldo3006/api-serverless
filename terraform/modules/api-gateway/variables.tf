@@ -24,6 +24,18 @@ variable "binary_media_types" {
   default     = ["multipart/form-data", "image/jpeg", "image/png"]
 }
 
+variable "throttling_rate_limit" {
+  description = "Steady-state requests per second allowed on the stage. The default is a placeholder, not based on measured traffic."
+  type        = number
+  default     = 10
+}
+
+variable "throttling_burst_limit" {
+  description = "Maximum concurrent burst of requests allowed on the stage. The default is a placeholder, not based on measured traffic."
+  type        = number
+  default     = 20
+}
+
 variable "domain" {
   description = "Custom domain of the API, such as api.example.com."
   type        = string

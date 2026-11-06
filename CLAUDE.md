@@ -60,7 +60,7 @@ Request flow: `index.js` (`serverless-http` when `ENVIRONMENT=lambda`, otherwise
 - **Auth is HTTP Basic, checked on each request** against the bcrypt hash in the database (no sessions or tokens). Public routes: `GET /healthz`, `POST /user`, `GET /product/:productId`. `authenticate` sets `req.user`. Product and image routes then use `requireOwnedProduct(message)` for ownership checks.
 - **Errors:** wrap async handlers in `asyncHandler` so failures reach `middleware/errorHandler.js`, which maps them to the `{ Status, Message }` response shape.
 - **Lazy, cached database access:** `getSequelize()` and `getModels()` cache a promise across warm Lambda invocations and clear it on failure so the next request retries. Importing `src/app` doesn't touch the database, which is why unit tests can run by mocking repositories with `jest.mock`.
-- **Credentials:** `resolveCredentials` uses Secrets Manager when `SECRET_ID` is set, otherwise `DB_USERNAME`/`DB_PASSWORD`.
+- **Credentials:** `resolveCredentials` uses Secrets Manager when `SECRET_ID` is set, otherwise `DB_USERNAME`/`DB_PASSWORD`. TLS to the database is opt-in via `DB_TLS=true`, using `certs/rds-global-bundle.pem`. Terraform sets it on both Lambdas because Aurora requires it, and local MySQL usually runs without it.
 
 ### Two Lambdas, one artifact
 

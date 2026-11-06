@@ -47,7 +47,7 @@ Terraform reads the Lambda package from `serverless-api/dist/function.zip`, so `
 ```powershell
 npm ci --omit=dev
 New-Item -ItemType Directory -Force dist
-Compress-Archive -Force -Path index.js, migrate.js, package.json, src, migrations, node_modules -DestinationPath dist/function.zip
+Compress-Archive -Force -Path index.js, migrate.js, package.json, src, migrations, certs, node_modules -DestinationPath dist/function.zip
 ```
 
 `npm ci --omit=dev` removes Jest from `node_modules`, so run `npm install` again before testing. A new top-level file or directory the code needs at runtime must also be added to the `Compress-Archive` list.

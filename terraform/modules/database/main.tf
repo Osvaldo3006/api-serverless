@@ -36,19 +36,32 @@ resource "aws_kms_key" "aurora" {
   enable_key_rotation = true
 }
 
+resource "aws_rds_cluster_parameter_group" "aurora" {
+  name        = "${var.name_prefix}-aurora-mysql8"
+  family      = "aurora-mysql8.0"
+  description = "${var.name_prefix} Aurora MySQL cluster parameters"
+
+  # Reject connections that don't use TLS.
+  parameter {
+    name  = "require_secure_transport"
+    value = "ON"
+  }
+}
+
 resource "aws_rds_cluster" "aurora" {
-  cluster_identifier            = "${var.name_prefix}-aurora"
-  engine                        = "aurora-mysql"
-  engine_mode                   = "provisioned"
-  engine_version                = var.engine_version
-  database_name                 = var.database_name
-  db_subnet_group_name          = aws_db_subnet_group.private.name
-  vpc_security_group_ids        = [aws_security_group.database.id]
-  master_username               = "admin"
-  manage_master_user_password   = true
-  storage_encrypted             = true
-  master_user_secret_kms_key_id = aws_kms_key.aurora.key_id
-  skip_final_snapshot           = true
+  cluster_identifier              = "${var.name_prefix}-aurora"
+  engine                          = "aurora-mysql"
+  engine_mode                     = "provisioned"
+  engine_version                  = var.engine_version
+  database_name                   = var.database_name
+  db_cluster_parameter_group_name = aws_rds_cluster_parameter_group.aurora.name
+  db_subnet_group_name            = aws_db_subnet_group.private.name
+  vpc_security_group_ids          = [aws_security_group.database.id]
+  master_username                 = "admin"
+  manage_master_user_password     = true
+  storage_encrypted               = true
+  master_user_secret_kms_key_id   = aws_kms_key.aurora.key_id
+  skip_final_snapshot             = true
 
   serverlessv2_scaling_configuration {
     max_capacity = 1.0

@@ -6,6 +6,7 @@ locals {
     REGION      = var.region
     HOST        = var.db_host
     DATABASE    = var.db_name
+    DB_TLS      = "true"
   }
 }
 

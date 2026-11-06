@@ -1,6 +1,12 @@
 locals {
   environment = "dev"
   name_prefix = "${var.project}-${local.environment}"
+
+  # dev stays destroyable: a destroy removes the database and the images.
+  deletion_protection     = false
+  skip_final_snapshot     = true
+  backup_retention_period = 1
+  force_destroy           = true
 }
 
 module "network" {
@@ -22,6 +28,9 @@ module "database" {
   engine_version           = var.aurora_engine_version
   database_name            = var.database_name
   app_db_password_version  = var.app_db_password_version
+  deletion_protection      = local.deletion_protection
+  skip_final_snapshot      = local.skip_final_snapshot
+  backup_retention_period  = local.backup_retention_period
 }
 
 module "storage" {
@@ -29,6 +38,7 @@ module "storage" {
 
   name_prefix    = local.name_prefix
   s3_endpoint_id = module.network.s3_endpoint_id
+  force_destroy  = local.force_destroy
 }
 
 module "iam" {

@@ -80,7 +80,7 @@ Consequences:
 ## Infrastructure architecture
 
 - `terraform/bootstrap` creates the S3 state bucket once per account, and its own state stays local.
-- `terraform/environments/{dev,prod}` are separate roots with separate state, and their `main.tf` files differ only in the environment name. Apply wiring changes to both.
+- `terraform/environments/{dev,prod}` are separate roots with separate state, and their `main.tf` files differ only in the `locals` block: the environment name and the data protection settings. Module defaults are the protected values, `prod` keeps them, and `dev` opts out so it stays destroyable. Apply wiring changes to both.
 - Module dependency order, which avoids cycles: `network` → `database` and `storage` → `iam` → `lambda` → `api-gateway`.
 - `lambda` has an explicit `depends_on` on `network`, `database` and `iam`, because the migrator runs during apply and needs the database instance, the Secrets Manager endpoint and the IAM attachments to exist first.
 - The database password uses an ephemeral `random_password` and write-only `secret_string_wo`, so it stays out of state. That means it only changes when `app_db_password_version` is increased.

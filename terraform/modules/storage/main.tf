@@ -5,7 +5,7 @@ resource "random_id" "bucket_suffix" {
 
 resource "aws_s3_bucket" "images" {
   bucket        = "${var.name_prefix}-images-${random_id.bucket_suffix.hex}"
-  force_destroy = true
+  force_destroy = var.force_destroy
 }
 
 resource "aws_s3_bucket_public_access_block" "images" {

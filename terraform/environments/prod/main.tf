@@ -1,6 +1,12 @@
 locals {
   environment = "prod"
   name_prefix = "${var.project}-${local.environment}"
+
+  # prod keeps its data: the database and the images survive a destroy.
+  deletion_protection     = true
+  skip_final_snapshot     = false
+  backup_retention_period = 7
+  force_destroy           = false
 }
 
 module "network" {
@@ -22,6 +28,9 @@ module "database" {
   engine_version           = var.aurora_engine_version
   database_name            = var.database_name
   app_db_password_version  = var.app_db_password_version
+  deletion_protection      = local.deletion_protection
+  skip_final_snapshot      = local.skip_final_snapshot
+  backup_retention_period  = local.backup_retention_period
 }
 
 module "storage" {
@@ -29,6 +38,7 @@ module "storage" {
 
   name_prefix    = local.name_prefix
   s3_endpoint_id = module.network.s3_endpoint_id
+  force_destroy  = local.force_destroy
 }
 
 module "iam" {

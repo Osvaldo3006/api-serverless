@@ -91,12 +91,6 @@ Done one at a time, in the order listed, each only after the user approves it. R
 
 The goal is a portfolio project that shows good security, infrastructure structure and network design without overengineering. Hardening comes first, so CI scanners and the README describe the final state.
 
-- **D2, network hardening:**
-  - Restrict `lambda-sg` egress to 3306 to `database-sg`, 443 to `endpoint-sg`, and 443 to the S3 prefix list.
-  - Restrict `endpoint-sg` ingress to 443 from `lambda-sg` and drop its egress rule.
-  - Add a policy to the S3 gateway endpoint that only allows the images bucket.
-  - Add a bucket policy to the images bucket that denies requests without TLS (`aws:SecureTransport`) or from outside the VPC endpoint (`aws:sourceVpce`).
-  - Deny requests without TLS on the state bucket in `bootstrap`.
 - **D3, data and service protection:**
   - Enable `enable_key_rotation` on the Aurora KMS key.
   - Require TLS to Aurora: `require_secure_transport` in a cluster parameter group, and SSL with the RDS CA bundle in the Sequelize config. The CA bundle must be added to the `Compress-Archive` list.

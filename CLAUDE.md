@@ -91,11 +91,6 @@ Done one at a time, in the order listed, each only after the user approves it. R
 
 The goal is a portfolio project that shows good security, infrastructure structure and network design without overengineering. Hardening comes first, so CI scanners and the README describe the final state.
 
-- **D3, data and service protection:**
-  - Enable `enable_key_rotation` on the Aurora KMS key.
-  - Require TLS to Aurora: `require_secure_transport` in a cluster parameter group, and SSL with the RDS CA bundle in the Sequelize config. The CA bundle must be added to the `Compress-Archive` list.
-  - Set throttling limits on the API Gateway stage, which also limits brute force against Basic Auth.
-  - Set reserved concurrency on the API Lambda, to cap database connections.
 - **D4, per-environment settings:** set `skip_final_snapshot`, `force_destroy`, `deletion_protection` and backup retention per environment. `prod` keeps its data, and `dev` stays destroyable.
 - **D5, observability and structure:**
   - Add log groups with retention for both Lambdas, and API Gateway access logs.
@@ -106,6 +101,6 @@ The goal is a portfolio project that shows good security, infrastructure structu
 - **D8, README rewrite:**
   - Fix the outdated endpoint list and keep credit to the original author.
   - Add the architecture diagram and a short section on security decisions.
-  - Explain that the throttling limits are placeholders, not based on measured traffic, and are global to the stage rather than per client.
+  - Explain the throttling limits and the API Lambda's reserved concurrency: both are placeholders, not based on measured traffic. Throttling is global to the stage rather than per client, and reserved concurrency caps Aurora connections but can fail to apply on accounts with a low concurrency quota.
   - List what was left out on purpose as next steps for real production: NAT Gateway, WAF, Cognito, automatic secret rotation, multi-region, VPC Flow Logs and X-Ray.
 - **Open question:** whether to add `UNIQUE` on `sku`, which has the same race condition as `username`.

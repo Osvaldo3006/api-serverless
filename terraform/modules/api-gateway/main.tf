@@ -89,6 +89,19 @@ resource "aws_api_gateway_stage" "this" {
   stage_name    = var.stage_name
 }
 
+# Limits apply to the whole stage, not per client. Requests over the limit get
+# a 429 without invoking Lambda, which caps cost and slows Basic Auth guessing.
+resource "aws_api_gateway_method_settings" "all" {
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  stage_name  = aws_api_gateway_stage.this.stage_name
+  method_path = "*/*"
+
+  settings {
+    throttling_rate_limit  = var.throttling_rate_limit
+    throttling_burst_limit = var.throttling_burst_limit
+  }
+}
+
 data "aws_acm_certificate" "api" {
   domain   = coalesce(var.certificate_domain, var.domain)
   statuses = ["ISSUED"]

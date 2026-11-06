@@ -6,6 +6,7 @@ locals {
     REGION      = var.region
     HOST        = var.db_host
     DATABASE    = var.db_name
+    DB_TLS      = "true"
   }
 }
 
@@ -17,6 +18,9 @@ resource "aws_lambda_function" "api" {
   handler          = "index.handler"
   runtime          = var.runtime
   timeout          = 30
+
+  # Each instance holds its own database connection, so this caps connections to Aurora.
+  reserved_concurrent_executions = var.api_reserved_concurrency
 
   vpc_config {
     subnet_ids         = var.subnet_ids

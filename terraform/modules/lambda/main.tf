@@ -19,6 +19,9 @@ resource "aws_lambda_function" "api" {
   runtime          = var.runtime
   timeout          = 30
 
+  # Each instance holds its own database connection, so this caps connections to Aurora.
+  reserved_concurrent_executions = var.api_reserved_concurrency
+
   vpc_config {
     subnet_ids         = var.subnet_ids
     security_group_ids = var.security_group_ids

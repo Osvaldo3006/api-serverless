@@ -67,3 +67,9 @@ variable "app_db_password_version" {
   description = "Version of the API database user's password. Changing it re-runs the migration Lambda."
   type        = number
 }
+
+variable "api_reserved_concurrency" {
+  description = "Maximum concurrent instances of the API function, which caps database connections. The default is a placeholder, not based on measured traffic. AWS requires 100 unreserved executions per account, so accounts with a lower concurrency quota fail to apply: request a quota increase or set -1 (no reservation)."
+  type        = number
+  default     = 10
+}

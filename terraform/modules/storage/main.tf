@@ -64,3 +64,47 @@ resource "aws_vpc_endpoint_policy" "s3" {
     ]
   })
 }
+
+# Defense in depth on top of IAM: no plain HTTP, and object data can only be
+# read or written through the VPC endpoint. Bucket management and object
+# deletion stay reachable from outside, so Terraform can still manage and
+# destroy the bucket.
+resource "aws_s3_bucket_policy" "images" {
+  bucket = aws_s3_bucket.images.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "DenyInsecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = [
+          aws_s3_bucket.images.arn,
+          "${aws_s3_bucket.images.arn}/*"
+        ]
+        Condition = {
+          Bool = { "aws:SecureTransport" = "false" }
+        }
+      },
+      {
+        Sid       = "DenyObjectDataOutsideVpce"
+        Effect    = "Deny"
+        Principal = "*"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject"
+        ]
+        Resource = "${aws_s3_bucket.images.arn}/*"
+        Condition = {
+          StringNotEquals = { "aws:sourceVpce" = var.s3_endpoint_id }
+        }
+      }
+    ]
+  })
+
+  # Applying a bucket policy while the public access block is still being
+  # created can fail, so wait for it.
+  depends_on = [aws_s3_bucket_public_access_block.images]
+}

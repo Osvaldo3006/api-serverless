@@ -74,23 +74,20 @@ resource "aws_security_group" "endpoint" {
   description = "Interface Endpoint security group to allow inbound/outbound from the VPC"
   vpc_id      = aws_vpc.main.id
 
-  ingress {
-    from_port       = 0
-    to_port         = 0
-    protocol        = "-1"
-    security_groups = [aws_security_group.lambda.id]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = {
     Name = "${var.name_prefix}-endpoint-sg"
   }
+}
+
+# No egress rules: the endpoints only answer connections they receive, and
+# security groups are stateful.
+resource "aws_vpc_security_group_ingress_rule" "endpoint_from_lambda" {
+  security_group_id            = aws_security_group.endpoint.id
+  description                  = "HTTPS from the Lambda functions"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+  referenced_security_group_id = aws_security_group.lambda.id
 }
 
 resource "aws_vpc_endpoint" "s3" {

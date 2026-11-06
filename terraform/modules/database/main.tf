@@ -15,6 +15,17 @@ resource "aws_security_group" "database" {
   }
 }
 
+# Belongs to the Lambda security group, but lives here because the network
+# module can't reference the database security group without a cycle.
+resource "aws_vpc_security_group_egress_rule" "lambda_to_database" {
+  security_group_id            = var.lambda_security_group_id
+  description                  = "MySQL to Aurora"
+  ip_protocol                  = "tcp"
+  from_port                    = 3306
+  to_port                      = 3306
+  referenced_security_group_id = aws_security_group.database.id
+}
+
 resource "aws_db_subnet_group" "private" {
   name       = "${var.name_prefix}-db-subnets"
   subnet_ids = var.subnet_ids

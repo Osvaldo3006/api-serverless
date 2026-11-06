@@ -38,21 +38,35 @@ resource "aws_route_table_association" "private" {
 
 # Lives here, not in the lambda module, because the endpoint and database
 # security groups reference it. This keeps the module graph free of cycles.
+# Egress is managed with standalone rules: Terraform removes the default
+# allow-all rule on creation, and the rule to the database lives in the
+# database module, which owns that security group.
 resource "aws_security_group" "lambda" {
   name        = "${var.name_prefix}-lambda-sg"
   description = "lambda security group to allow inbound/outbound from the VPC"
   vpc_id      = aws_vpc.main.id
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = {
     Name = "${var.name_prefix}-lambda-sg"
   }
+}
+
+resource "aws_vpc_security_group_egress_rule" "lambda_to_endpoints" {
+  security_group_id            = aws_security_group.lambda.id
+  description                  = "HTTPS to the interface endpoints"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+  referenced_security_group_id = aws_security_group.endpoint.id
+}
+
+resource "aws_vpc_security_group_egress_rule" "lambda_to_s3" {
+  security_group_id = aws_security_group.lambda.id
+  description       = "HTTPS to S3 through the gateway endpoint"
+  ip_protocol       = "tcp"
+  from_port         = 443
+  to_port           = 443
+  prefix_list_id    = aws_vpc_endpoint.s3.prefix_list_id
 }
 
 resource "aws_security_group" "endpoint" {
@@ -60,23 +74,20 @@ resource "aws_security_group" "endpoint" {
   description = "Interface Endpoint security group to allow inbound/outbound from the VPC"
   vpc_id      = aws_vpc.main.id
 
-  ingress {
-    from_port       = 0
-    to_port         = 0
-    protocol        = "-1"
-    security_groups = [aws_security_group.lambda.id]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = {
     Name = "${var.name_prefix}-endpoint-sg"
   }
+}
+
+# No egress rules: the endpoints only answer connections they receive, and
+# security groups are stateful.
+resource "aws_vpc_security_group_ingress_rule" "endpoint_from_lambda" {
+  security_group_id            = aws_security_group.endpoint.id
+  description                  = "HTTPS from the Lambda functions"
+  ip_protocol                  = "tcp"
+  from_port                    = 443
+  to_port                      = 443
+  referenced_security_group_id = aws_security_group.lambda.id
 }
 
 resource "aws_vpc_endpoint" "s3" {

@@ -27,7 +27,8 @@ module "database" {
 module "storage" {
   source = "../../modules/storage"
 
-  name_prefix = local.name_prefix
+  name_prefix    = local.name_prefix
+  s3_endpoint_id = module.network.s3_endpoint_id
 }
 
 module "iam" {

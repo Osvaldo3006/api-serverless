@@ -67,6 +67,34 @@ resource "aws_s3_bucket_public_access_block" "state" {
   restrict_public_buckets = true
 }
 
+# State can hold sensitive values, so it must never travel over plain HTTP.
+resource "aws_s3_bucket_policy" "state" {
+  bucket = aws_s3_bucket.state.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "DenyInsecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = [
+          aws_s3_bucket.state.arn,
+          "${aws_s3_bucket.state.arn}/*"
+        ]
+        Condition = {
+          Bool = { "aws:SecureTransport" = "false" }
+        }
+      }
+    ]
+  })
+
+  # Applying a bucket policy while the public access block is still being
+  # created can fail, so wait for it.
+  depends_on = [aws_s3_bucket_public_access_block.state]
+}
+
 output "state_bucket_name" {
   description = "Value for -backend-config=\"bucket=...\" in terraform init."
   value       = aws_s3_bucket.state.id

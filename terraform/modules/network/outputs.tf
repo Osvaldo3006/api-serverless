@@ -12,3 +12,8 @@ output "lambda_security_group_id" {
   description = "ID of the security group attached to the Lambda functions."
   value       = aws_security_group.lambda.id
 }
+
+output "s3_endpoint_id" {
+  description = "ID of the S3 gateway endpoint."
+  value       = aws_vpc_endpoint.s3.id
+}

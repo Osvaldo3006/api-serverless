@@ -32,7 +32,8 @@ resource "aws_db_subnet_group" "private" {
 }
 
 resource "aws_kms_key" "aurora" {
-  description = "${var.name_prefix} Aurora secrets"
+  description         = "${var.name_prefix} Aurora secrets"
+  enable_key_rotation = true
 }
 
 resource "aws_rds_cluster" "aurora" {

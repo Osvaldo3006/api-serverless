@@ -13,6 +13,7 @@ Nothing is deployed and no AWS account is connected yet. Code runs locally and T
 - Everything in the repo (code, comments, docs, commit messages, branch names, PR descriptions) is in English.
 - `main` is the default branch. Each change gets its own branch off `main` and uses Conventional Commits.
 - Show the user the commit message and wait for approval before committing.
+- Propose before changing anything. Each proposal covers one change: what changes, which files, and a short reason, a few lines at most. Wait for the user's approval before editing files or creating a branch, then do only what was approved. If the work turns out to need something the proposal didn't cover, stop and propose it.
 
 ## Commands
 
@@ -86,11 +87,30 @@ Consequences:
 
 ## Planned work
 
-Done one at a time, each only after the user approves it. Remove items from this list as they merge.
+Done one at a time, in the order listed, each only after the user approves it. Remove items from this list as they merge.
 
-- **D2:** set `skip_final_snapshot` and `force_destroy` per environment.
-- **D3:** add environment `outputs.tf`, `terraform.tfvars.example`, and a log group with retention.
-- **D4:** migrate to AWS SDK v3, replace `body-parser` with `express.json()`, and use a UTC timezone in Sequelize.
-- **D5:** rewrite `README.md`, including the outdated endpoint list, while keeping credit to the original author.
-- **D6:** add GitHub Actions workflows using OIDC. `.github/workflows` is currently empty.
+The goal is a portfolio project that shows good security, infrastructure structure and network design without overengineering. Hardening comes first, so CI scanners and the README describe the final state.
+
+- **D2, network hardening:**
+  - Restrict `lambda-sg` egress to 3306 to `database-sg`, 443 to `endpoint-sg`, and 443 to the S3 prefix list.
+  - Restrict `endpoint-sg` ingress to 443 from `lambda-sg` and drop its egress rule.
+  - Add a policy to the S3 gateway endpoint that only allows the images bucket.
+  - Add a bucket policy to the images bucket that denies requests without TLS (`aws:SecureTransport`) or from outside the VPC endpoint (`aws:sourceVpce`).
+  - Deny requests without TLS on the state bucket in `bootstrap`.
+- **D3, data and service protection:**
+  - Enable `enable_key_rotation` on the Aurora KMS key.
+  - Require TLS to Aurora: `require_secure_transport` in a cluster parameter group, and SSL with the RDS CA bundle in the Sequelize config. The CA bundle must be added to the `Compress-Archive` list.
+  - Set throttling limits on the API Gateway stage, which also limits brute force against Basic Auth.
+  - Set reserved concurrency on the API Lambda, to cap database connections.
+- **D4, per-environment settings:** set `skip_final_snapshot`, `force_destroy`, `deletion_protection` and backup retention per environment. `prod` keeps its data, and `dev` stays destroyable.
+- **D5, observability and structure:**
+  - Add log groups with retention for both Lambdas, and API Gateway access logs.
+  - Add `default_tags` (project, environment) to the provider in both environments.
+  - Add environment `outputs.tf` and `terraform.tfvars.example`.
+- **D6, application dependencies:** migrate to AWS SDK v3, replace `body-parser` with `express.json()`, and use a UTC timezone in Sequelize. It comes before CI so `npm audit` doesn't fail on the deprecated SDK.
+- **D7, CI with GitHub Actions and OIDC:** no stored AWS keys. Run `terraform fmt -check` and `validate`, an IaC security scanner (Checkov or Trivy), `npm audit` and the unit tests. `.github/workflows` is currently empty.
+- **D8, README rewrite:**
+  - Fix the outdated endpoint list and keep credit to the original author.
+  - Add the architecture diagram and a short section on security decisions.
+  - List what was left out on purpose as next steps for real production: NAT Gateway, WAF, Cognito, automatic secret rotation, multi-region, VPC Flow Logs and X-Ray.
 - **Open question:** whether to add `UNIQUE` on `sku`, which has the same race condition as `username`.

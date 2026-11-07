@@ -7,3 +7,8 @@ output "api_invoke_arn" {
   description = "Invoke ARN of the API Lambda function."
   value       = aws_lambda_function.api.invoke_arn
 }
+
+output "migrator_function_name" {
+  description = "Name of the migration Lambda function."
+  value       = aws_lambda_function.migrator.function_name
+}

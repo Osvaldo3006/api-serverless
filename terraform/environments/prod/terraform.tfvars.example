@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is ignored by git.
+
+region = "us-east-1"
+# Doesn't overlap with dev, so both VPCs can be connected later.
+cidr_block      = "10.1.0.0/16"
+private_subnets = 2
+api_stage       = "prod"
+domain          = "api.example.com"
+
+# Optional.
+# aws_profile        = "my-profile"
+# hosted_zone_name   = "example.com"
+# certificate_domain = "*.example.com"

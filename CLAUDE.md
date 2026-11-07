@@ -40,7 +40,7 @@ terraform init -backend=false             # enough for validate, no AWS needed
 terraform validate
 ```
 
-A real deployment needs `terraform init -backend-config="bucket=<name>" -backend-config="region=<region>"` and a `terraform.tfvars`.
+A real deployment needs `terraform init -backend-config="bucket=<name>" -backend-config="region=<region>"` and a `terraform.tfvars`, copied from the environment's `terraform.tfvars.example`.
 
 Terraform reads the Lambda package from `serverless-api/dist/function.zip`, so `plan` and `apply` fail until it is built. Build it with PowerShell 7, not Windows PowerShell 5.1, whose zip files use backslashes in paths that Lambda can't load:
 
@@ -91,8 +91,6 @@ Done one at a time, in the order listed, each only after the user approves it. R
 
 The goal is a portfolio project that shows good security, infrastructure structure and network design without overengineering. Hardening comes first, so CI scanners and the README describe the final state.
 
-- **D5, observability and structure:**
-  - Add environment `outputs.tf` and `terraform.tfvars.example`.
 - **D6, application dependencies:** migrate to AWS SDK v3, replace `body-parser` with `express.json()`, and use a UTC timezone in Sequelize. It comes before CI so `npm audit` doesn't fail on the deprecated SDK.
 - **D7, CI with GitHub Actions and OIDC:** no stored AWS keys. Run `terraform fmt -check` and `validate`, an IaC security scanner (Checkov or Trivy), `npm audit` and the unit tests. `.github/workflows` is currently empty.
 - **D8, README rewrite:**

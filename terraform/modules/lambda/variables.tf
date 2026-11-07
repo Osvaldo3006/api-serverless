@@ -73,3 +73,9 @@ variable "api_reserved_concurrency" {
   type        = number
   default     = 10
 }
+
+variable "log_retention_days" {
+  description = "Days to keep the functions' logs in CloudWatch."
+  type        = number
+  default     = 365
+}

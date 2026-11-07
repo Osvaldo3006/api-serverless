@@ -52,3 +52,9 @@ variable "certificate_domain" {
   type        = string
   default     = null
 }
+
+variable "log_retention_days" {
+  description = "Days to keep the access logs in CloudWatch. They include client IP addresses."
+  type        = number
+  default     = 365
+}

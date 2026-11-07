@@ -79,7 +79,7 @@ Consequences:
 
 ## Infrastructure architecture
 
-- `terraform/bootstrap` creates the S3 state bucket once per account, and its own state stays local.
+- `terraform/bootstrap` runs once per account, in the environments' region, and its own state stays local. It creates the S3 state bucket and the account-level CloudWatch role that API Gateway needs for access logs, which dev and prod would overwrite if each managed it.
 - `terraform/environments/{dev,prod}` are separate roots with separate state, and their `main.tf` files differ only in the `locals` block: the environment name and the data protection settings. Module defaults are the protected values, `prod` keeps them, and `dev` opts out so it stays destroyable. Apply wiring changes to both.
 - Module dependency order, which avoids cycles: `network` → `database` and `storage` → `iam` → `lambda` → `api-gateway`.
 - `lambda` has an explicit `depends_on` on `network`, `database` and `iam`, because the migrator runs during apply and needs the database instance, the Secrets Manager endpoint and the IAM attachments to exist first.
@@ -92,7 +92,6 @@ Done one at a time, in the order listed, each only after the user approves it. R
 The goal is a portfolio project that shows good security, infrastructure structure and network design without overengineering. Hardening comes first, so CI scanners and the README describe the final state.
 
 - **D5, observability and structure:**
-  - Add log groups with retention for both Lambdas, and API Gateway access logs.
   - Add `default_tags` (project, environment) to the provider in both environments, and `copy_tags_to_snapshot` on the Aurora cluster so snapshots inherit them.
   - Add environment `outputs.tf` and `terraform.tfvars.example`.
 - **D6, application dependencies:** migrate to AWS SDK v3, replace `body-parser` with `express.json()`, and use a UTC timezone in Sequelize. It comes before CI so `npm audit` doesn't fail on the deprecated SDK.

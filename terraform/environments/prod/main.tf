@@ -7,6 +7,9 @@ locals {
   skip_final_snapshot     = false
   backup_retention_period = 7
   force_destroy           = false
+
+  # Access logs include client IPs: a year covers incident review and auditing.
+  log_retention_days = 365
 }
 
 module "network" {
@@ -68,6 +71,7 @@ module "lambda" {
   master_secret_arn       = module.database.master_secret_arn
   app_secret_arn          = module.database.app_secret_arn
   app_db_password_version = var.app_db_password_version
+  log_retention_days      = local.log_retention_days
 
   # The migration Lambda runs during apply, so it needs the database instance,
   # the Secrets Manager endpoint and the IAM policy attachments to exist first.
@@ -84,4 +88,5 @@ module "api_gateway" {
   domain               = var.domain
   hosted_zone_name     = var.hosted_zone_name
   certificate_domain   = var.certificate_domain
+  log_retention_days   = local.log_retention_days
 }

@@ -83,10 +83,36 @@ resource "aws_api_gateway_deployment" "this" {
   ]
 }
 
+resource "aws_cloudwatch_log_group" "access" {
+  name              = "/aws/apigateway/${var.name_prefix}-access"
+  retention_in_days = var.log_retention_days
+}
+
+# Writing to CloudWatch needs the account-level role created in terraform/bootstrap.
 resource "aws_api_gateway_stage" "this" {
   rest_api_id   = aws_api_gateway_rest_api.this.id
   deployment_id = aws_api_gateway_deployment.this.id
   stage_name    = var.stage_name
+
+  # One JSON line per request. Request headers are left out, so the Basic Auth
+  # credentials never reach the logs.
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.access.arn
+    format = jsonencode({
+      requestId          = "$context.requestId"
+      ip                 = "$context.identity.sourceIp"
+      userAgent          = "$context.identity.userAgent"
+      requestTime        = "$context.requestTime"
+      httpMethod         = "$context.httpMethod"
+      path               = "$context.path"
+      protocol           = "$context.protocol"
+      status             = "$context.status"
+      responseLength     = "$context.responseLength"
+      responseLatency    = "$context.responseLatency"
+      integrationLatency = "$context.integrationLatency"
+      integrationError   = "$context.integrationErrorMessage"
+    })
+  }
 }
 
 # Limits apply to the whole stage, not per client. Requests over the limit get

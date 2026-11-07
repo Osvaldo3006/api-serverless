@@ -92,7 +92,7 @@ Done one at a time, in the order listed, each only after the user approves it. R
 The goal is a portfolio project that shows good security, infrastructure structure and network design without overengineering. Hardening comes first, so CI scanners and the README describe the final state.
 
 - **D6, application dependencies:** migrate to AWS SDK v3, replace `body-parser` with `express.json()`, and use a UTC timezone in Sequelize. It comes before CI so `npm audit` doesn't fail on the deprecated SDK.
-- **D7, CI with GitHub Actions and OIDC:** no stored AWS keys. Run `terraform fmt -check` and `validate`, an IaC security scanner (Checkov or Trivy), `npm audit` and the unit tests. `.github/workflows` is currently empty.
+- **D7, CI with GitHub Actions and OIDC:** no stored AWS keys. Run `terraform fmt -check` and `validate`, an IaC security scanner (Checkov or Trivy), `npm audit` and the unit tests. The pipeline must not print `terraform output` or unreviewed plans to the logs, since they can expose the account ID and resource ARNs. `.github/workflows` is currently empty.
 - **D8, README rewrite:**
   - Fix the outdated endpoint list and keep credit to the original author.
   - Add the architecture diagram and a short section on security decisions.

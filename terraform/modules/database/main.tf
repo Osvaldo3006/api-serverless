@@ -65,6 +65,7 @@ resource "aws_rds_cluster" "aurora" {
   backup_retention_period         = var.backup_retention_period
   skip_final_snapshot             = var.skip_final_snapshot
   final_snapshot_identifier       = var.skip_final_snapshot ? null : "${var.name_prefix}-aurora-final"
+  copy_tags_to_snapshot           = true
 
   serverlessv2_scaling_configuration {
     max_capacity = 1.0

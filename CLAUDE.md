@@ -91,8 +91,7 @@ Done one at a time, in the order listed, each only after the user approves it. R
 
 The goal is a portfolio project that shows good security, infrastructure structure and network design without overengineering. Hardening comes first, so CI scanners and the README describe the final state.
 
-- **D6, application dependencies:** replace `body-parser` with `express.json()`, use a UTC timezone in Sequelize, then clear the `npm audit` findings: run `npm audit fix` without `--force`, replace `uuid` with `crypto.randomUUID()`, and verify with both the unit and integration tests. It comes before CI so `npm audit` passes without exceptions.
-- **D7, CI with GitHub Actions and OIDC:** no stored AWS keys. Run `terraform fmt -check` and `validate`, an IaC security scanner (Checkov or Trivy), `npm audit` and the unit tests. The pipeline must not print `terraform output` or unreviewed plans to the logs, since they can expose the account ID and resource ARNs. `.github/workflows` is currently empty.
+- **D7, CI with GitHub Actions and OIDC:** no stored AWS keys. Run `terraform fmt -check` and `validate`, an IaC security scanner (Checkov or Trivy), `npm audit --omit=dev` and the unit tests. The audit skips dev dependencies because they aren't in the Lambda package, and Jest 30 has transitive advisories with no fixed release. The pipeline must not print `terraform output` or unreviewed plans to the logs, since they can expose the account ID and resource ARNs. `.github/workflows` is currently empty.
 - **D8, README rewrite:**
   - Fix the outdated endpoint list and keep credit to the original author.
   - Add the architecture diagram and a short section on security decisions.

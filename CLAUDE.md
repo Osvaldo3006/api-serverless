@@ -92,7 +92,8 @@ Done one at a time, in the order listed, each only after the user approves it. R
 The goal is a portfolio project that shows good security, infrastructure structure and network design without overengineering. Hardening comes first, so CI scanners and the README describe the final state.
 
 - **D7, CI with GitHub Actions and OIDC:** no stored AWS keys. Run `terraform fmt -check` and `validate`, an IaC security scanner (Checkov or Trivy), `npm audit --omit=dev` and the unit tests. The audit skips dev dependencies because they aren't in the Lambda package, and Jest 30 has transitive advisories with no fixed release. The pipeline must not print `terraform output` or unreviewed plans to the logs, since they can expose the account ID and resource ARNs. `.github/workflows` is currently empty.
-- **D8, README rewrite:**
+- **D8, real deployment of `dev`:** after D7, so the OIDC role exists. Bootstrap the account, apply `dev`, and run an end-to-end smoke test against the deployed API: create a user, a product and an image, then read and delete them. This covers the never-exercised items in "Project status" and the updated `mysql2` and `sequelize` against real Aurora. Check the IaC scanner and `npm audit --omit=dev` are still clean, record the results for the README, then `terraform destroy`, since Aurora and the VPC endpoints are billed hourly. Don't paste account IDs, ARNs or endpoint URLs into the repo or the chat logs that end up in it.
+- **D9, README rewrite:**
   - Fix the outdated endpoint list and keep credit to the original author.
   - Add the architecture diagram and a short section on security decisions.
   - Explain the throttling limits and the API Lambda's reserved concurrency: both are placeholders, not based on measured traffic. Throttling is global to the stage rather than per client, and reserved concurrency caps Aurora connections but can fail to apply on accounts with a low concurrency quota.

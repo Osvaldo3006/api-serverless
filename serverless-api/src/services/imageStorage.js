@@ -1,19 +1,21 @@
-const AWS = require("aws-sdk");
+const { S3Client, PutObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
 const uuid = require("uuid");
 
-const client = () => new AWS.S3({ region: process.env.REGION });
+const client = () => new S3Client({ region: process.env.REGION });
 
+// A single PutObject is enough: API Gateway caps request payloads at 10 MB.
 async function uploadImage(image) {
-    const result = await client().upload({
+    const key = `${uuid.v4()}/${image.name}`;
+    await client().send(new PutObjectCommand({
         Bucket: process.env.S3_BUCKET,
-        Key: `${uuid.v4()}/${image.name}`,
+        Key: key,
         Body: image.data
-    }).promise();
-    return result.Key;
+    }));
+    return key;
 }
 
 async function deleteImage(key) {
-    await client().deleteObject({ Bucket: process.env.S3_BUCKET, Key: key }).promise();
+    await client().send(new DeleteObjectCommand({ Bucket: process.env.S3_BUCKET, Key: key }));
 }
 
 module.exports = { uploadImage, deleteImage };

@@ -30,7 +30,7 @@ function createSequelize({ username, password }) {
         port: process.env.DB_PORT ? Number(process.env.DB_PORT) : 3306,
         dialect: "mysql",
         dialectOptions: tlsOptions(),
-        timezone: "-05:00"
+        timezone: "+00:00"
     });
 }
 

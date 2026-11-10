@@ -13,16 +13,24 @@ locals {
 # Without these, Lambda creates the log groups itself, with no retention, and
 # they outlive a destroy.
 resource "aws_cloudwatch_log_group" "api" {
+  #checkov:skip=CKV_AWS_158:Logs hold no secrets and are encrypted by CloudWatch. A customer managed key adds cost without a key-access requirement.
+  #checkov:skip=CKV_AWS_338:Retention is set per environment through var.log_retention_days. A year of logs adds storage cost.
   name              = "/aws/lambda/${var.name_prefix}-api"
   retention_in_days = var.log_retention_days
 }
 
 resource "aws_cloudwatch_log_group" "migrator" {
+  #checkov:skip=CKV_AWS_158:Logs hold no secrets and are encrypted by CloudWatch. A customer managed key adds cost without a key-access requirement.
+  #checkov:skip=CKV_AWS_338:Retention is set per environment through var.log_retention_days. A year of logs adds storage cost.
   name              = "/aws/lambda/${var.name_prefix}-migrator"
   retention_in_days = var.log_retention_days
 }
 
 resource "aws_lambda_function" "api" {
+  #checkov:skip=CKV_AWS_50:X-Ray tracing is a documented next step for production.
+  #checkov:skip=CKV_AWS_116:Invoked synchronously by API Gateway, and a dead-letter queue only applies to asynchronous invocations.
+  #checkov:skip=CKV_AWS_173:Environment variables hold no secrets, only the secret's ARN, and Lambda encrypts them at rest.
+  #checkov:skip=CKV_AWS_272:Code signing needs an AWS Signer profile and a signing step in CI, out of scope for this project.
   function_name    = "${var.name_prefix}-api"
   filename         = var.artifact_location
   source_code_hash = local.artifact_hash
@@ -54,6 +62,10 @@ resource "aws_lambda_function" "api" {
 
 # Same artifact, different entry point and role: only this function can use the master credentials.
 resource "aws_lambda_function" "migrator" {
+  #checkov:skip=CKV_AWS_50:X-Ray tracing is a documented next step for production.
+  #checkov:skip=CKV_AWS_116:Invoked synchronously by Terraform, and a dead-letter queue only applies to asynchronous invocations.
+  #checkov:skip=CKV_AWS_173:Environment variables hold no secrets, only the secrets' ARNs, and Lambda encrypts them at rest.
+  #checkov:skip=CKV_AWS_272:Code signing needs an AWS Signer profile and a signing step in CI, out of scope for this project.
   function_name    = "${var.name_prefix}-migrator"
   filename         = var.artifact_location
   source_code_hash = local.artifact_hash
@@ -61,6 +73,10 @@ resource "aws_lambda_function" "migrator" {
   handler          = "migrate.handler"
   runtime          = var.runtime
   timeout          = 120
+
+  # With 1, only one migration can run at a time: a second invocation while one
+  # is running is throttled instead of applying the same migrations concurrently.
+  reserved_concurrent_executions = var.migrator_reserved_concurrency
 
   # Referencing the log group also makes it exist before the invocation below.
   logging_config {

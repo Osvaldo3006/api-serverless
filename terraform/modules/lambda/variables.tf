@@ -69,9 +69,20 @@ variable "app_db_password_version" {
 }
 
 variable "api_reserved_concurrency" {
-  description = "Maximum concurrent instances of the API function, which caps database connections. The default is a placeholder, not based on measured traffic. AWS requires 100 unreserved executions per account, so accounts with a lower concurrency quota fail to apply: request a quota increase or set -1 (no reservation)."
+  description = "Maximum concurrent instances of the API function, which caps database connections. The default is a placeholder, not based on measured traffic. AWS requires 100 unreserved executions per account, so accounts whose concurrency quota can't cover both reservations fail to apply: request a quota increase, or set this and migrator_reserved_concurrency to -1 (no reservation)."
   type        = number
   default     = 10
+}
+
+variable "migrator_reserved_concurrency" {
+  description = "Maximum concurrent instances of the migration function. 1 keeps migrations from running concurrently. Set -1 (no reservation) on accounts with a low concurrency quota, as explained in api_reserved_concurrency."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = contains([-1, 1], var.migrator_reserved_concurrency)
+    error_message = "Use 1 (one migration at a time) or -1 (no reservation)."
+  }
 }
 
 variable "log_retention_days" {

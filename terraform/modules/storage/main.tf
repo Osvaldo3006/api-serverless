@@ -4,6 +4,10 @@ resource "random_id" "bucket_suffix" {
 }
 
 resource "aws_s3_bucket" "images" {
+  #checkov:skip=CKV_AWS_18:Server access logs add storage cost. CloudTrail data events are the production option.
+  #checkov:skip=CKV2_AWS_62:Nothing consumes object events.
+  #checkov:skip=CKV_AWS_144:Cross-region replication is part of the documented multi-region next step.
+  #checkov:skip=CKV_AWS_145:SSE-S3 encrypts every object. A customer managed key adds per-request cost without a key-access requirement.
   bucket        = "${var.name_prefix}-images-${random_id.bucket_suffix.hex}"
   force_destroy = var.force_destroy
 }
@@ -60,6 +64,18 @@ resource "aws_s3_bucket_lifecycle_configuration" "images" {
 
     noncurrent_version_expiration {
       noncurrent_days = 30
+    }
+  }
+
+  # Parts of an interrupted upload are billed until removed.
+  rule {
+    id     = "abort_incomplete_multipart_uploads"
+    status = "Enabled"
+
+    filter {}
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
     }
   }
 

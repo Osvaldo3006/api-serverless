@@ -35,6 +35,10 @@ variable "state_bucket_name" {
 }
 
 resource "aws_s3_bucket" "state" {
+  #checkov:skip=CKV_AWS_18:Server access logs add storage cost. CloudTrail data events are the production option.
+  #checkov:skip=CKV2_AWS_62:Nothing consumes object events.
+  #checkov:skip=CKV_AWS_144:Cross-region replication is part of the documented multi-region next step.
+  #checkov:skip=CKV_AWS_145:SSE-S3 encrypts every object. A customer managed key adds cost without a key-access requirement.
   bucket = var.state_bucket_name
 
   lifecycle {
@@ -59,6 +63,37 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
       sse_algorithm = "AES256"
     }
   }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "state" {
+  bucket = aws_s3_bucket.state.id
+
+  # Every apply writes a new version, so old ones are kept for a while to
+  # recover from a bad apply, then removed.
+  rule {
+    id     = "expire_noncurrent_versions"
+    status = "Enabled"
+
+    filter {}
+
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+  }
+
+  rule {
+    id     = "abort_incomplete_multipart_uploads"
+    status = "Enabled"
+
+    filter {}
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+
+  # A lifecycle rule for noncurrent versions needs versioning to be enabled first.
+  depends_on = [aws_s3_bucket_versioning.state]
 }
 
 resource "aws_s3_bucket_public_access_block" "state" {

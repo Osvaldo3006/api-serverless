@@ -4,6 +4,7 @@ resource "aws_security_group" "database" {
   vpc_id      = var.vpc_id
 
   ingress {
+    description     = "MySQL from the Lambda functions"
     from_port       = 3306
     to_port         = 3306
     protocol        = "tcp"
@@ -31,9 +32,30 @@ resource "aws_db_subnet_group" "private" {
   subnet_ids = var.subnet_ids
 }
 
+data "aws_caller_identity" "current" {}
+
+data "aws_partition" "current" {}
+
 resource "aws_kms_key" "aurora" {
-  description         = "${var.name_prefix} Aurora secrets"
+  description         = "${var.name_prefix} Aurora storage and secrets"
   enable_key_rotation = true
+
+  # Same access as the default key policy, written out so it is reviewable:
+  # the account delegates to IAM, so only principals whose IAM policies allow
+  # it can use the key. The Lambda roles get kms:Decrypt that way. Naming
+  # them here instead would create a cycle with the iam module.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "EnableIamPolicies"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root" }
+        Action    = "kms:*"
+        Resource  = "*"
+      }
+    ]
+  })
 }
 
 resource "aws_rds_cluster_parameter_group" "aurora" {
@@ -49,6 +71,12 @@ resource "aws_rds_cluster_parameter_group" "aurora" {
 }
 
 resource "aws_rds_cluster" "aurora" {
+  #checkov:skip=CKV2_AWS_8:Automated backups (backup_retention_period) cover recovery. AWS Backup adds cost without a cross-account or cross-region need yet.
+  #checkov:skip=CKV_AWS_139:Set per environment through var.deletion_protection. prod enables it; dev disables it so it stays destroyable.
+  #checkov:skip=CKV_AWS_162:By design. The API uses a dedicated data-only user whose password lives in Secrets Manager.
+  #checkov:skip=CKV_AWS_324:Exporting database logs to CloudWatch adds ingestion cost. Left out until there is a need.
+  #checkov:skip=CKV_AWS_325:Audit logging adds ingestion cost. Left out until there is a need.
+  #checkov:skip=CKV_AWS_326:Backtrack is billed per change record. Point-in-time restore from automated backups covers recovery.
   cluster_identifier              = "${var.name_prefix}-aurora"
   engine                          = "aurora-mysql"
   engine_mode                     = "provisioned"
@@ -60,6 +88,7 @@ resource "aws_rds_cluster" "aurora" {
   master_username                 = "admin"
   manage_master_user_password     = true
   storage_encrypted               = true
+  kms_key_id                      = aws_kms_key.aurora.arn
   master_user_secret_kms_key_id   = aws_kms_key.aurora.key_id
   deletion_protection             = var.deletion_protection
   backup_retention_period         = var.backup_retention_period
@@ -74,10 +103,13 @@ resource "aws_rds_cluster" "aurora" {
 }
 
 resource "aws_rds_cluster_instance" "aurora" {
-  cluster_identifier = aws_rds_cluster.aurora.id
-  instance_class     = "db.serverless"
-  engine             = aws_rds_cluster.aurora.engine
-  engine_version     = aws_rds_cluster.aurora.engine_version
+  #checkov:skip=CKV_AWS_118:Enhanced Monitoring adds cost. Standard CloudWatch metrics are enough for this workload.
+  #checkov:skip=CKV_AWS_353:Performance Insights adds cost. Left out until there is a performance problem to investigate.
+  cluster_identifier         = aws_rds_cluster.aurora.id
+  instance_class             = "db.serverless"
+  engine                     = aws_rds_cluster.aurora.engine
+  engine_version             = aws_rds_cluster.aurora.engine_version
+  auto_minor_version_upgrade = true
 }
 
 # Credentials of the API's database user. The migration Lambda creates this user
@@ -89,6 +121,7 @@ ephemeral "random_password" "app_db" {
 }
 
 resource "aws_secretsmanager_secret" "app_db" {
+  #checkov:skip=CKV2_AWS_57:Automatic rotation is a documented next step. It is rotated by increasing app_db_password_version.
   name_prefix = "${var.name_prefix}-db-app-"
   description = "Credentials of the API database user"
   kms_key_id  = aws_kms_key.aurora.arn

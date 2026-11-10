@@ -1,4 +1,5 @@
 resource "aws_api_gateway_rest_api" "this" {
+  #checkov:skip=CKV_AWS_237:Updated in place, never replaced. The deployment, which is replaced on every change, already uses create_before_destroy.
   name               = var.name_prefix
   description        = "Inventory Management API"
   binary_media_types = var.binary_media_types
@@ -17,6 +18,8 @@ resource "aws_api_gateway_resource" "proxy" {
 }
 
 resource "aws_api_gateway_method" "root" {
+  #checkov:skip=CKV_AWS_59:By design. Express checks HTTP Basic credentials, and some routes are public.
+  #checkov:skip=CKV2_AWS_53:By design. Requests are proxied to Express, which validates them.
   rest_api_id   = aws_api_gateway_rest_api.this.id
   resource_id   = aws_api_gateway_rest_api.this.root_resource_id
   http_method   = "ANY"
@@ -24,6 +27,8 @@ resource "aws_api_gateway_method" "root" {
 }
 
 resource "aws_api_gateway_method" "proxy" {
+  #checkov:skip=CKV_AWS_59:By design. Express checks HTTP Basic credentials, and some routes are public.
+  #checkov:skip=CKV2_AWS_53:By design. Requests are proxied to Express, which validates them.
   rest_api_id   = aws_api_gateway_rest_api.this.id
   resource_id   = aws_api_gateway_resource.proxy.id
   http_method   = "ANY"
@@ -84,12 +89,18 @@ resource "aws_api_gateway_deployment" "this" {
 }
 
 resource "aws_cloudwatch_log_group" "access" {
+  #checkov:skip=CKV_AWS_158:Logs hold no secrets and are encrypted by CloudWatch. A customer managed key adds cost without a key-access requirement.
   name              = "/aws/apigateway/${var.name_prefix}-access"
   retention_in_days = var.log_retention_days
 }
 
 # Writing to CloudWatch needs the account-level role created in terraform/bootstrap.
 resource "aws_api_gateway_stage" "this" {
+  #checkov:skip=CKV2_AWS_4:Access logs are enabled. Execution logs would go to a log group API Gateway creates itself, with no retention, outside Terraform.
+  #checkov:skip=CKV_AWS_73:X-Ray tracing is a documented next step for production.
+  #checkov:skip=CKV2_AWS_29:WAF is a documented next step for production. Stage throttling limits request volume meanwhile.
+  #checkov:skip=CKV2_AWS_51:Client certificates authenticate API Gateway to HTTP backends. The Lambda proxy integration doesn't use them.
+  #checkov:skip=CKV_AWS_120:Responses depend on the caller's credentials, so caching them is unsafe, and the cache is billed hourly.
   rest_api_id   = aws_api_gateway_rest_api.this.id
   deployment_id = aws_api_gateway_deployment.this.id
   stage_name    = var.stage_name
@@ -118,6 +129,7 @@ resource "aws_api_gateway_stage" "this" {
 # Limits apply to the whole stage, not per client. Requests over the limit get
 # a 429 without invoking Lambda, which caps cost and slows Basic Auth guessing.
 resource "aws_api_gateway_method_settings" "all" {
+  #checkov:skip=CKV_AWS_225:Responses depend on the caller's credentials, so caching them is unsafe, and the cache is billed hourly.
   rest_api_id = aws_api_gateway_rest_api.this.id
   stage_name  = aws_api_gateway_stage.this.stage_name
   method_path = "*/*"
@@ -136,6 +148,7 @@ data "aws_acm_certificate" "api" {
 resource "aws_api_gateway_domain_name" "this" {
   domain_name              = var.domain
   regional_certificate_arn = data.aws_acm_certificate.api.arn
+  security_policy          = "TLS_1_2"
 
   endpoint_configuration {
     types = ["REGIONAL"]

@@ -3,12 +3,21 @@ data "aws_availability_zones" "all" {
 }
 
 resource "aws_vpc" "main" {
+  #checkov:skip=CKV2_AWS_11:VPC Flow Logs are a documented next step for production.
   cidr_block           = var.cidr_block
   enable_dns_hostnames = true
 
   tags = {
     Name = "${var.name_prefix}-vpc"
   }
+}
+
+# Every VPC comes with a default security group that allows all traffic between
+# its members and all egress. Nothing here uses it, and managing it with no
+# rules removes them, so a resource created without a security group gets no
+# network access by accident.
+resource "aws_default_security_group" "default" {
+  vpc_id = aws_vpc.main.id
 }
 
 resource "aws_subnet" "private" {
@@ -42,6 +51,7 @@ resource "aws_route_table_association" "private" {
 # allow-all rule on creation, and the rule to the database lives in the
 # database module, which owns that security group.
 resource "aws_security_group" "lambda" {
+  #checkov:skip=CKV2_AWS_5:False positive. It is attached to both Lambda functions, which receive it from the lambda module's input.
   name        = "${var.name_prefix}-lambda-sg"
   description = "lambda security group to allow inbound/outbound from the VPC"
   vpc_id      = aws_vpc.main.id

@@ -18,6 +18,11 @@ variable "app_secret_arn" {
   type        = string
 }
 
+variable "permissions_boundary_arn" {
+  description = "ARN of the permissions boundary created in terraform/bootstrap. The deploy roles can only create roles that carry it."
+  type        = string
+}
+
 variable "kms_key_arn" {
   description = "ARN of the KMS key that encrypts the secrets."
   type        = string

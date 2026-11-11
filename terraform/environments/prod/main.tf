@@ -44,6 +44,8 @@ module "storage" {
   force_destroy  = local.force_destroy
 }
 
+data "aws_caller_identity" "current" {}
+
 module "iam" {
   source = "../../modules/iam"
 
@@ -52,6 +54,9 @@ module "iam" {
   master_secret_arn = module.database.master_secret_arn
   app_secret_arn    = module.database.app_secret_arn
   kms_key_arn       = module.database.kms_key_arn
+
+  # Created by terraform/bootstrap, which names it lambda-boundary-<environment>.
+  permissions_boundary_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/lambda-boundary-${local.environment}"
 }
 
 module "lambda" {

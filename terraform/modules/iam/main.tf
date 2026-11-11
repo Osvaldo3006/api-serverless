@@ -82,8 +82,9 @@ resource "aws_iam_policy" "migrator_secrets" {
 }
 
 resource "aws_iam_role" "api" {
-  name               = "${var.name_prefix}-api-lambda"
-  assume_role_policy = local.lambda_assume_role_policy
+  name                 = "${var.name_prefix}-api-lambda"
+  assume_role_policy   = local.lambda_assume_role_policy
+  permissions_boundary = var.permissions_boundary_arn
 }
 
 resource "aws_iam_role_policy_attachment" "api" {
@@ -98,8 +99,9 @@ resource "aws_iam_role_policy_attachment" "api" {
 }
 
 resource "aws_iam_role" "migrator" {
-  name               = "${var.name_prefix}-migrator-lambda"
-  assume_role_policy = local.lambda_assume_role_policy
+  name                 = "${var.name_prefix}-migrator-lambda"
+  assume_role_policy   = local.lambda_assume_role_policy
+  permissions_boundary = var.permissions_boundary_arn
 }
 
 resource "aws_iam_role_policy_attachment" "migrator" {

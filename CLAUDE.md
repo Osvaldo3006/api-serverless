@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Portfolio project: a Node.js/Express REST API on AWS Lambda, API Gateway, Aurora MySQL and S3, provisioned with Terraform. It started as an import of `NotHarshhaa/DevOps-Projects` (DevOps-Project-22) and is being reworked.
 
-Nothing is deployed and no AWS account is connected yet. Code runs locally and Terraform has only been validated and applied against mocked providers. These have never been exercised on real AWS: binary image delivery through API Gateway, the Aurora master user creating the API database user, and the availability of the Aurora engine version in a given region.
+Nothing is deployed, and for cost reasons nothing will be: no AWS account is connected. Code runs locally and Terraform has only been validated and applied against mocked providers. These have never been exercised on real AWS: binary image delivery through API Gateway, the Aurora master user creating the API database user, and the availability of the Aurora engine version in a given region.
 
 ## Working agreements
 
@@ -91,9 +91,12 @@ Done one at a time, in the order listed, each only after the user approves it. R
 
 The goal is a portfolio project that shows good security, infrastructure structure and network design without overengineering. Hardening comes first, so CI scanners and the README describe the final state.
 
-- **D7, CI with GitHub Actions and OIDC:** no stored AWS keys. Run `terraform fmt -check` and `validate`, an IaC security scanner (Checkov or Trivy), `npm audit --omit=dev` and the unit tests. The audit skips dev dependencies because they aren't in the Lambda package, and Jest 30 has transitive advisories with no fixed release. The pipeline must not print `terraform output` or unreviewed plans to the logs, since they can expose the account ID and resource ARNs. `.github/workflows` is currently empty.
-- **D8, real deployment of `dev`:** after D7, so the OIDC role exists. Bootstrap the account, apply `dev`, and run an end-to-end smoke test against the deployed API: create a user, a product and an image, then read and delete them. This covers the never-exercised items in "Project status" and the updated `mysql2` and `sequelize` against real Aurora. Check the IaC scanner and `npm audit --omit=dev` are still clean, record the results for the README, then `terraform destroy`, since Aurora and the VPC endpoints are billed hourly. Don't paste account IDs, ARNs or endpoint URLs into the repo or the chat logs that end up in it.
+- **D8, CD with GitHub Actions and OIDC, written but never run:** there is no AWS account, so it is checked only by `terraform validate`, Checkov and the existing CI.
+  - `terraform/bootstrap` creates the GitHub OIDC provider and one deploy role per environment. Each role's trust policy accepts only this repository and its own GitHub environment (`sub` = `repo:<owner>/<repo>:environment:<env>`), so a `dev` run can't assume the `prod` role.
+  - A single `deploy.yml`, triggered only by `workflow_dispatch` with an `environment` input (`dev` or `prod`), builds the zip and runs `terraform plan` and `apply` for that environment. The `prod` GitHub environment requires manual approval.
+  - No stored AWS keys. The workflow must not print `terraform output` or plans to the logs, since they can expose the account ID and resource ARNs.
 - **D9, README rewrite:**
+  - State plainly that nothing has been deployed and the CD workflow has never run.
   - Fix the outdated endpoint list and keep credit to the original author.
   - Add the architecture diagram and a short section on security decisions.
   - Explain the throttling limits and the API Lambda's reserved concurrency: both are placeholders, not based on measured traffic. Throttling is global to the stage rather than per client, and reserved concurrency caps Aurora connections but can fail to apply on accounts with a low concurrency quota.

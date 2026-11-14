@@ -1,7 +1,7 @@
 # Creates the account-level resources the environments need: the S3 bucket that
 # holds their state, the bucket that keeps deployed Lambda packages for
 # rollback, the role API Gateway uses for access logs, and the GitHub OIDC
-# provider with one deploy role per environment.
+# provider with a read-only plan role and a deploy role per environment.
 # Run it once per AWS account, in the environments' region. Its own state stays
 # local, since the bucket doesn't exist yet.
 #
@@ -526,19 +526,91 @@ resource "aws_iam_role_policy" "github_deploy_iam" {
   })
 }
 
+# The deploy workflow plans with this role before anyone approves the apply, so
+# it can't change anything. Each role trusts only its own <environment>-plan
+# GitHub environment, which needs no approval.
+resource "aws_iam_role" "github_plan" {
+  for_each = toset(var.environments)
+
+  name = "github-plan-${each.key}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action    = "sts:AssumeRoleWithWebIdentity"
+        Effect    = "Allow"
+        Principal = { Federated = aws_iam_openid_connect_provider.github.arn }
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:environment:${each.key}-plan"
+          }
+        }
+      }
+    ]
+  })
+}
+
+# Reads every resource Terraform refreshes, the state and the rollback packages.
+# It doesn't include secretsmanager:GetSecretValue.
+resource "aws_iam_role_policy_attachment" "github_plan_read_only" {
+  for_each = aws_iam_role.github_plan
+
+  role       = each.value.name
+  policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+}
+
+resource "aws_iam_role_policy" "github_plan" {
+  for_each = aws_iam_role.github_plan
+
+  name = "plan"
+  role = each.value.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        # Planning takes the state lock, a separate object next to the state.
+        # The key must match the backend key in terraform/environments/<env>.
+        Sid    = "TakeStateLock"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:DeleteObject"
+        ]
+        Resource = "${aws_s3_bucket.state.arn}/${each.key}/terraform.tfstate.tflock"
+      },
+      {
+        # ReadOnlyAccess would let it read the images users upload, which
+        # Terraform never needs.
+        Sid      = "DenyUserImages"
+        Effect   = "Deny"
+        Action   = "s3:GetObject*"
+        Resource = "arn:aws:s3:::${var.project}-${each.key}-images-*/*"
+      }
+    ]
+  })
+}
+
 output "state_bucket_name" {
   description = "Value for -backend-config=\"bucket=...\" in terraform init."
   value       = aws_s3_bucket.state.id
 }
 
 output "artifacts_bucket_name" {
-  description = "Value for the ARTIFACTS_BUCKET variable of each GitHub environment."
+  description = "Value for the ARTIFACTS_BUCKET variable of each <environment>-plan GitHub environment."
   value       = aws_s3_bucket.artifacts.id
 }
 
-# Not a credential, but it reveals the account ID. Store it as a GitHub
-# environment variable and keep it out of logs.
+# Not credentials, but they reveal the account ID. Store them as GitHub
+# environment variables and keep them out of logs.
 output "github_deploy_role_arns" {
-  description = "Deploy role ARN per environment, for the AWS_ROLE_ARN variable of each GitHub environment."
+  description = "Deploy role ARN per environment, for the AWS_ROLE_ARN variable of each <environment> GitHub environment."
   value       = { for env, role in aws_iam_role.github_deploy : env => role.arn }
+}
+
+output "github_plan_role_arns" {
+  description = "Plan role ARN per environment, for the AWS_PLAN_ROLE_ARN variable of each <environment>-plan GitHub environment."
+  value       = { for env, role in aws_iam_role.github_plan : env => role.arn }
 }

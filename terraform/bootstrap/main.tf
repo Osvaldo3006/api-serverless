@@ -1,6 +1,7 @@
 # Creates the account-level resources the environments need: the S3 bucket that
-# holds their state, the role API Gateway uses for access logs, and the GitHub
-# OIDC provider with one deploy role per environment.
+# holds their state, the bucket that keeps deployed Lambda packages for
+# rollback, the role API Gateway uses for access logs, and the GitHub OIDC
+# provider with one deploy role per environment.
 # Run it once per AWS account, in the environments' region. Its own state stays
 # local, since the bucket doesn't exist yet.
 #
@@ -39,6 +40,11 @@ variable "aws_profile" {
 
 variable "state_bucket_name" {
   description = "Name of the state bucket. S3 bucket names are global, so it must be unique."
+  type        = string
+}
+
+variable "artifacts_bucket_name" {
+  description = "Name of the bucket that keeps the deployed Lambda packages for rollback. S3 bucket names are global, so it must be unique."
   type        = string
 }
 
@@ -166,6 +172,104 @@ resource "aws_s3_bucket_policy" "state" {
   # Applying a bucket policy while the public access block is still being
   # created can fail, so wait for it.
   depends_on = [aws_s3_bucket_public_access_block.state]
+}
+
+# Keeps the Lambda package of each deploy, so the deploy workflow can roll back
+# to an earlier one. Each environment writes a single key, <environment>/function.zip,
+# and versioning keeps the earlier packages as noncurrent versions.
+resource "aws_s3_bucket" "artifacts" {
+  #checkov:skip=CKV_AWS_18:Server access logs add storage cost. CloudTrail data events are the production option.
+  #checkov:skip=CKV2_AWS_62:Nothing consumes object events.
+  #checkov:skip=CKV_AWS_144:Cross-region replication is part of the documented multi-region next step.
+  #checkov:skip=CKV_AWS_145:SSE-S3 encrypts every object. A customer managed key adds cost without a key-access requirement.
+  bucket = var.artifacts_bucket_name
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_s3_bucket_versioning" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  # The current package never expires. The two most recent earlier packages
+  # are always kept, whatever their age, and older ones are removed 60 days
+  # after being replaced.
+  rule {
+    id     = "keep_rollback_versions"
+    status = "Enabled"
+
+    filter {}
+
+    noncurrent_version_expiration {
+      noncurrent_days           = 60
+      newer_noncurrent_versions = 2
+    }
+  }
+
+  rule {
+    id     = "abort_incomplete_multipart_uploads"
+    status = "Enabled"
+
+    filter {}
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+
+  depends_on = [aws_s3_bucket_versioning.artifacts]
+}
+
+resource "aws_s3_bucket_public_access_block" "artifacts" {
+  bucket                  = aws_s3_bucket.artifacts.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "DenyInsecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = [
+          aws_s3_bucket.artifacts.arn,
+          "${aws_s3_bucket.artifacts.arn}/*"
+        ]
+        Condition = {
+          Bool = { "aws:SecureTransport" = "false" }
+        }
+      }
+    ]
+  })
+
+  depends_on = [aws_s3_bucket_public_access_block.artifacts]
 }
 
 # API Gateway writes access logs through a single role per account and region,
@@ -421,6 +525,11 @@ resource "aws_iam_role_policy" "github_deploy_iam" {
 output "state_bucket_name" {
   description = "Value for -backend-config=\"bucket=...\" in terraform init."
   value       = aws_s3_bucket.state.id
+}
+
+output "artifacts_bucket_name" {
+  description = "Value for the ARTIFACTS_BUCKET variable of each GitHub environment."
+  value       = aws_s3_bucket.artifacts.id
 }
 
 # Not a credential, but it reveals the account ID. Store it as a GitHub

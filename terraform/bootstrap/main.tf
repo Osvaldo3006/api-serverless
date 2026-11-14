@@ -402,6 +402,10 @@ resource "aws_iam_role" "github_deploy" {
 
   name = "github-deploy-${each.key}"
 
+  # Matches the deploy job's 90-minute timeout, so the credentials can't expire
+  # in the middle of an apply and leave the state locked.
+  max_session_duration = 5400
+
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [

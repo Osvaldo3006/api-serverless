@@ -83,6 +83,8 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    # Also the AWS session length (role-duration-seconds and the role's
+    # max_session_duration): change all three together.
     timeout-minutes: 90
     permissions:
       contents: read
@@ -183,6 +185,8 @@ jobs:
           role-session-name: github-${{ inputs.action }}-${{ inputs.environment }}-${{ github.run_id }}
           aws-region: ${{ vars.AWS_REGION }}
           mask-aws-account-id: true
+          # As long as the job timeout, and no longer than the role's maximum.
+          role-duration-seconds: 5400
 
       # Each deploy is a version of the same key, so the earlier packages are
       # its noncurrent versions, newest first.

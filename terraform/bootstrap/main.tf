@@ -1,16 +1,15 @@
 # Creates the account-level resources the environments need: the S3 bucket that
 # holds their state, the bucket that keeps deployed Lambda packages for
 # rollback, the role API Gateway uses for access logs, and the GitHub OIDC
-# provider with a read-only plan role and a deploy role per environment.
-# Run it once per AWS account, in the environments' region. Its own state stays
-# local, since the bucket doesn't exist yet.
+# provider with a read-only plan role and a deploy role.
 #
-# The recommended layout is one AWS account per environment: run it in the dev
-# account with environments = ["dev"] and in the prod account with
-# environments = ["prod"]. The account is then the boundary, so the dev deploy
-# role can't reach prod resources or prod state. A single account with
-# environments = ["dev", "prod"] also works, but every deploy role can then
-# reach both environments.
+# Each environment has its own AWS account: run this once in the dev account
+# with environment = "dev" and once in the prod account with
+# environment = "prod", in the environment's region. Its own state stays local,
+# since the bucket doesn't exist yet. The account is the boundary between
+# environments: the roles' permissions are account-wide (PowerUserAccess,
+# ReadOnlyAccess, the rds!cluster-* master secrets), so the dev roles can't
+# reach prod only because prod is in another account.
 terraform {
   required_version = ">= 1.11, < 2.0"
 
@@ -64,13 +63,13 @@ variable "github_repository" {
   }
 }
 
-variable "environments" {
-  description = "Environments deployed to this account, each getting its own deploy role. Use one per account: [\"dev\"] or [\"prod\"]."
-  type        = list(string)
+variable "environment" {
+  description = "The one environment deployed to this account: \"dev\" or \"prod\"."
+  type        = string
 
   validation {
-    condition     = length(var.environments) > 0 && alltrue([for env in var.environments : contains(["dev", "prod"], env)])
-    error_message = "environments must list at least one of \"dev\" and \"prod\"."
+    condition     = contains(["dev", "prod"], var.environment)
+    error_message = "environment must be \"dev\" or \"prod\"."
   }
 }
 
@@ -321,10 +320,8 @@ locals {
 # <project>-<environment>- prefix, so deploy roles can't change it. The
 # environments build its ARN from this name.
 resource "aws_iam_policy" "lambda_boundary" {
-  for_each = toset(var.environments)
-
-  name        = "lambda-boundary-${each.key}"
-  description = "Permissions boundary for the ${each.key} Lambda roles"
+  name        = "lambda-boundary-${var.environment}"
+  description = "Permissions boundary for the ${var.environment} Lambda roles"
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -336,7 +333,7 @@ resource "aws_iam_policy" "lambda_boundary" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/lambda/${var.project}-${each.key}-*:*"
+        Resource = "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/lambda/${var.project}-${var.environment}-*:*"
       },
       {
         # Lambda manages the ENIs of a function in a VPC. Their IDs aren't
@@ -369,7 +366,7 @@ resource "aws_iam_policy" "lambda_boundary" {
           "s3:PutObject",
           "s3:DeleteObject"
         ]
-        Resource = "arn:aws:s3:::${var.project}-${each.key}-images-*/*"
+        Resource = "arn:aws:s3:::${var.project}-${var.environment}-images-*/*"
       },
       {
         # The app user's secret has the environment prefix. Aurora names the
@@ -378,7 +375,7 @@ resource "aws_iam_policy" "lambda_boundary" {
         Effect = "Allow"
         Action = "secretsmanager:GetSecretValue"
         Resource = [
-          "arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:${var.project}-${each.key}-db-app-*",
+          "arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:${var.project}-${var.environment}-db-app-*",
           "arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:rds!cluster-*"
         ]
       },
@@ -398,9 +395,7 @@ resource "aws_iam_policy" "lambda_boundary" {
 # Each role trusts only workflow jobs that run in its own GitHub environment of
 # this repository, so a dev job can't assume the prod role.
 resource "aws_iam_role" "github_deploy" {
-  for_each = toset(var.environments)
-
-  name = "github-deploy-${each.key}"
+  name = "github-deploy-${var.environment}"
 
   # Matches the deploy job's 90-minute timeout, so the credentials can't expire
   # in the middle of an apply and leave the state locked.
@@ -416,7 +411,7 @@ resource "aws_iam_role" "github_deploy" {
         Condition = {
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:environment:${each.key}"
+            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:environment:${var.environment}"
           }
         }
       }
@@ -428,9 +423,7 @@ resource "aws_iam_role" "github_deploy" {
 # account-wide: writing least privilege per service can't be tested without an
 # account, and one account per environment is what keeps the blast radius small.
 resource "aws_iam_role_policy_attachment" "github_deploy_power_user" {
-  for_each = aws_iam_role.github_deploy
-
-  role       = each.value.name
+  role       = aws_iam_role.github_deploy.name
   policy_arn = "arn:aws:iam::aws:policy/PowerUserAccess"
 }
 
@@ -441,10 +434,8 @@ resource "aws_iam_role_policy_attachment" "github_deploy_power_user" {
 # can pass those roles only to Lambda. Inline role policies aren't allowed,
 # since the iam module doesn't use them.
 resource "aws_iam_role_policy" "github_deploy_iam" {
-  for_each = aws_iam_role.github_deploy
-
   name = "environment-iam"
-  role = each.value.id
+  role = aws_iam_role.github_deploy.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -457,21 +448,21 @@ resource "aws_iam_role_policy" "github_deploy_iam" {
           "iam:PutRolePermissionsBoundary",
           "iam:DetachRolePolicy"
         ]
-        Resource = "arn:aws:iam::${local.account_id}:role/${var.project}-${each.key}-*"
+        Resource = "arn:aws:iam::${local.account_id}:role/${var.project}-${var.environment}-*"
         Condition = {
-          StringEquals = { "iam:PermissionsBoundary" = aws_iam_policy.lambda_boundary[each.key].arn }
+          StringEquals = { "iam:PermissionsBoundary" = aws_iam_policy.lambda_boundary.arn }
         }
       },
       {
         Sid      = "AttachAllowedPoliciesToBoundedRoles"
         Effect   = "Allow"
         Action   = "iam:AttachRolePolicy"
-        Resource = "arn:aws:iam::${local.account_id}:role/${var.project}-${each.key}-*"
+        Resource = "arn:aws:iam::${local.account_id}:role/${var.project}-${var.environment}-*"
         Condition = {
-          StringEquals = { "iam:PermissionsBoundary" = aws_iam_policy.lambda_boundary[each.key].arn }
+          StringEquals = { "iam:PermissionsBoundary" = aws_iam_policy.lambda_boundary.arn }
           ArnLike = {
             "iam:PolicyARN" = [
-              "arn:aws:iam::${local.account_id}:policy/${var.project}-${each.key}-*",
+              "arn:aws:iam::${local.account_id}:policy/${var.project}-${var.environment}-*",
               "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
             ]
           }
@@ -494,7 +485,7 @@ resource "aws_iam_role_policy" "github_deploy_iam" {
           "iam:ListAttachedRolePolicies",
           "iam:ListInstanceProfilesForRole"
         ]
-        Resource = "arn:aws:iam::${local.account_id}:role/${var.project}-${each.key}-*"
+        Resource = "arn:aws:iam::${local.account_id}:role/${var.project}-${var.environment}-*"
       },
       {
         Sid    = "ManageEnvironmentPolicies"
@@ -511,13 +502,13 @@ resource "aws_iam_role_policy" "github_deploy_iam" {
           "iam:UntagPolicy",
           "iam:ListPolicyTags"
         ]
-        Resource = "arn:aws:iam::${local.account_id}:policy/${var.project}-${each.key}-*"
+        Resource = "arn:aws:iam::${local.account_id}:policy/${var.project}-${var.environment}-*"
       },
       {
         Sid      = "PassEnvironmentRolesToLambda"
         Effect   = "Allow"
         Action   = "iam:PassRole"
-        Resource = "arn:aws:iam::${local.account_id}:role/${var.project}-${each.key}-*"
+        Resource = "arn:aws:iam::${local.account_id}:role/${var.project}-${var.environment}-*"
         Condition = {
           StringEquals = { "iam:PassedToService" = "lambda.amazonaws.com" }
         }
@@ -530,9 +521,7 @@ resource "aws_iam_role_policy" "github_deploy_iam" {
 # it can't change anything. Each role trusts only its own <environment>-plan
 # GitHub environment, which needs no approval.
 resource "aws_iam_role" "github_plan" {
-  for_each = toset(var.environments)
-
-  name = "github-plan-${each.key}"
+  name = "github-plan-${var.environment}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -544,7 +533,7 @@ resource "aws_iam_role" "github_plan" {
         Condition = {
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:environment:${each.key}-plan"
+            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:environment:${var.environment}-plan"
           }
         }
       }
@@ -555,17 +544,13 @@ resource "aws_iam_role" "github_plan" {
 # Reads every resource Terraform refreshes, the state and the rollback packages.
 # It doesn't include secretsmanager:GetSecretValue.
 resource "aws_iam_role_policy_attachment" "github_plan_read_only" {
-  for_each = aws_iam_role.github_plan
-
-  role       = each.value.name
+  role       = aws_iam_role.github_plan.name
   policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
 }
 
 resource "aws_iam_role_policy" "github_plan" {
-  for_each = aws_iam_role.github_plan
-
   name = "plan"
-  role = each.value.id
+  role = aws_iam_role.github_plan.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -579,7 +564,7 @@ resource "aws_iam_role_policy" "github_plan" {
           "s3:PutObject",
           "s3:DeleteObject"
         ]
-        Resource = "${aws_s3_bucket.state.arn}/${each.key}/terraform.tfstate.tflock"
+        Resource = "${aws_s3_bucket.state.arn}/${var.environment}/terraform.tfstate.tflock"
       },
       {
         # ReadOnlyAccess would let it read the images users upload, which
@@ -587,7 +572,7 @@ resource "aws_iam_role_policy" "github_plan" {
         Sid      = "DenyUserImages"
         Effect   = "Deny"
         Action   = "s3:GetObject*"
-        Resource = "arn:aws:s3:::${var.project}-${each.key}-images-*/*"
+        Resource = "arn:aws:s3:::${var.project}-${var.environment}-images-*/*"
       }
     ]
   })
@@ -605,12 +590,12 @@ output "artifacts_bucket_name" {
 
 # Not credentials, but they reveal the account ID. Store them as GitHub
 # environment variables and keep them out of logs.
-output "github_deploy_role_arns" {
-  description = "Deploy role ARN per environment, for the AWS_ROLE_ARN variable of each <environment> GitHub environment."
-  value       = { for env, role in aws_iam_role.github_deploy : env => role.arn }
+output "github_deploy_role_arn" {
+  description = "Value for the AWS_ROLE_ARN variable of the <environment> GitHub environment."
+  value       = aws_iam_role.github_deploy.arn
 }
 
-output "github_plan_role_arns" {
-  description = "Plan role ARN per environment, for the AWS_PLAN_ROLE_ARN variable of each <environment>-plan GitHub environment."
-  value       = { for env, role in aws_iam_role.github_plan : env => role.arn }
+output "github_plan_role_arn" {
+  description = "Value for the AWS_PLAN_ROLE_ARN variable of the <environment>-plan GitHub environment."
+  value       = aws_iam_role.github_plan.arn
 }

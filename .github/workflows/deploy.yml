@@ -28,7 +28,7 @@ name: Deploy
 # (Deployment branches: main only):
 # - <environment>-plan, with no reviewers, holds the configuration
 #   (outputs of terraform/bootstrap, then terraform.tfvars values):
-#     AWS_PLAN_ROLE_ARN   github_plan_role_arns output, for this environment
+#     AWS_PLAN_ROLE_ARN   github_plan_role_arn output
 #     TF_STATE_BUCKET     state_bucket_name output
 #     ARTIFACTS_BUCKET    artifacts_bucket_name output
 #     AWS_REGION          region of the environment and both buckets
@@ -40,7 +40,7 @@ name: Deploy
 #     CERTIFICATE_DOMAIN  optional, defaults to DOMAIN
 # - <environment> holds only the deploy role, so the configuration lives in one
 #   place. prod needs required reviewers, so every prod apply waits for approval.
-#     AWS_ROLE_ARN        github_deploy_role_arns output, for this environment
+#     AWS_ROLE_ARN        github_deploy_role_arn output
 # These are variables, not secrets: none is a credential. The role ARNs reveal
 # the account ID, so the workflow masks it.
 #

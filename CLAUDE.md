@@ -79,7 +79,7 @@ Consequences:
 
 ## Infrastructure architecture
 
-- `terraform/bootstrap` runs once per account, in the environments' region, and its own state stays local. It creates the S3 state bucket and the account-level CloudWatch role that API Gateway needs for access logs, which dev and prod would overwrite if each managed it.
+- Each environment has its own AWS account, and `terraform/bootstrap` runs once in each, with `environment` set to `dev` or `prod`, in the environment's region. Its own state stays local. It creates the S3 state bucket and the CloudWatch role that API Gateway needs for access logs, which is an account-level setting.
 - `terraform/environments/{dev,prod}` are separate roots with separate state, and their `main.tf` files differ only in the `locals` block: the environment name and the data protection settings. Module defaults are the protected values, `prod` keeps them, and `dev` opts out so it stays destroyable. Apply wiring changes to both.
 - Module dependency order, which avoids cycles: `network` → `database` and `storage` → `iam` → `lambda` → `api-gateway`.
 - `lambda` has an explicit `depends_on` on `network`, `database` and `iam`, because the migrator runs during apply and needs the database instance, the Secrets Manager endpoint and the IAM attachments to exist first.

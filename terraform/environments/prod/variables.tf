@@ -14,6 +14,16 @@ variable "region" {
   type        = string
 }
 
+variable "aws_account_id" {
+  description = "ID of this environment's AWS account. Terraform stops before making any change if the credentials belong to another account."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.aws_account_id))
+    error_message = "aws_account_id must be a 12-digit AWS account ID."
+  }
+}
+
 variable "aws_profile" {
   description = "AWS CLI profile for local runs. Leave it null to use the default credential chain, as CI does."
   type        = string

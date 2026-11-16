@@ -24,11 +24,24 @@ terraform {
 provider "aws" {
   region  = var.region
   profile = var.aws_profile
+
+  # Guards against running with a profile for the other environment's account.
+  allowed_account_ids = [var.aws_account_id]
 }
 
 variable "region" {
   description = "AWS region of the state bucket."
   type        = string
+}
+
+variable "aws_account_id" {
+  description = "ID of the AWS account of this environment. Terraform stops before making any change if the credentials belong to another account."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.aws_account_id))
+    error_message = "aws_account_id must be a 12-digit AWS account ID."
+  }
 }
 
 variable "aws_profile" {

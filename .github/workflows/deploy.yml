@@ -161,6 +161,9 @@ jobs:
             echo "::error::AWS_PLAN_ROLE_ARN is not the github-plan-$ENVIRONMENT role."
             exit 1
           fi
+          # Not in tf_env: GitHub drops job outputs that contain a masked value,
+          # so apply takes it from its own role ARN.
+          echo "TF_VAR_aws_account_id=$account_id" >> "$GITHUB_ENV"
           if [[ "$ACTION" == rollback && ! "$VERSION" =~ ^(previous|[0-9a-f]{7,40})$ ]]; then
             echo "::error::version must be \"previous\" or a commit SHA of at least 7 characters."
             exit 1
@@ -411,6 +414,7 @@ jobs:
             echo "::error::AWS_ROLE_ARN in the $ENVIRONMENT environment is not the github-deploy-$ENVIRONMENT role."
             exit 1
           fi
+          echo "TF_VAR_aws_account_id=$account_id" >> "$GITHUB_ENV"
 
           # The configuration was checked by plan, in the $ENVIRONMENT-plan environment.
           echo "$TF_ENV" >> "$GITHUB_ENV"

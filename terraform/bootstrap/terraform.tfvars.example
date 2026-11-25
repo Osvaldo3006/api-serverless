@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is ignored by git.
+# Apply once per environment, in that environment's account.
+
+region         = "us-east-1"
+environment    = "dev"
+aws_account_id = "111111111111" # the account of this environment
+
+# S3 bucket names are global, so both must be unique.
+state_bucket_name     = "my-serverless-api-dev-tfstate"
+artifacts_bucket_name = "my-serverless-api-dev-artifacts"
+
+github_repository = "owner/repo"
+
+# Optional.
+# aws_profile = "my-profile"
+# project     = "serverless-api" # must match the environments' project

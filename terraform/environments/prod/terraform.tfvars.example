@@ -1,6 +1,7 @@
 # Copy to terraform.tfvars and fill in. terraform.tfvars is ignored by git.
 
-region = "us-east-1"
+region         = "us-east-1"
+aws_account_id = "222222222222" # the prod account
 # Doesn't overlap with dev, so both VPCs can be connected later.
 cidr_block      = "10.1.0.0/16"
 private_subnets = 2

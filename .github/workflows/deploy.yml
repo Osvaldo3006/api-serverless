@@ -3,12 +3,29 @@ name: Deploy
 # Deploys one environment, or rolls its Lambda code back to an earlier package.
 # It runs only when started by hand, from main.
 #
-# deploy:   builds the Lambda package, applies Terraform, then keeps the package
-#           in the artifacts bucket as <environment>/function.zip.
-# rollback: takes an earlier package from the artifacts bucket and applies
-#           Terraform from main with it. version is "previous" (the package
-#           that was current before this one) or the commit SHA of a deploy. The bucket always keeps the two most recent
+# It runs in two jobs, so the plan is visible before anyone approves a change:
+# plan:  builds or fetches the Lambda package and plans with a read-only role.
+#        The job summary lists what would change. Nothing is changed yet.
+# apply: runs only if the plan has changes, and in prod only after approval.
+#        It plans again with the deploy role and applies only if the new plan
+#        has the same resource addresses and actions as the approved one.
+#
+# deploy:   builds the Lambda package, applies Terraform, runs the smoke test,
+#           and only if it passes keeps the package in the artifacts bucket as
+#           <environment>/function.zip.
+# rollback: takes a kept package from the artifacts bucket and applies
+#           Terraform from main with it. version is "previous" (the most
+#           recent kept package other than the one running now) or the commit
+#           SHA of a deploy. The bucket always keeps the two most recent
 #           earlier packages, and older ones for 60 days after being replaced.
+#           Each kept package has a GitHub attestation, and a rollback refuses
+#           a package whose attestation doesn't verify.
+#
+# The smoke test runs after every apply: GET /healthz must return 200 and
+# GET /product/0 must return 404, which needs the API Lambda to reach Aurora.
+# It shows the package worked when deployed, not that it kept working later.
+# A package that fails it stays deployed but is never kept, so the run fails
+# and the fix is a rollback with version "previous".
 #
 # A rollback restores the code of both Lambdas, not the infrastructure or the
 # database schema: migrations only move forward, so the migrator finds nothing
@@ -16,11 +33,12 @@ name: Deploy
 # compatible with the code before it: add columns first and remove them in a
 # later release.
 #
-# One-time setup, per environment (dev and prod), in Settings > Environments:
-# - Deployment branches: main only.
-# - prod: required reviewers, so every prod run waits for approval.
-# - Variables (outputs of terraform/bootstrap, then terraform.tfvars values):
-#     AWS_ROLE_ARN        github_deploy_role_arns output, for this environment
+# One-time setup, per environment (dev and prod), in Settings > Environments.
+# Each environment needs two GitHub environments, both limited to main
+# (Deployment branches: main only):
+# - <environment>-plan, with no reviewers, holds the configuration
+#   (outputs of terraform/bootstrap, then terraform.tfvars values):
+#     AWS_PLAN_ROLE_ARN   github_plan_role_arn output
 #     TF_STATE_BUCKET     state_bucket_name output
 #     ARTIFACTS_BUCKET    artifacts_bucket_name output
 #     AWS_REGION          region of the environment and both buckets
@@ -30,8 +48,11 @@ name: Deploy
 #     DOMAIN              custom domain of the API
 #     HOSTED_ZONE_NAME    optional, defaults to DOMAIN
 #     CERTIFICATE_DOMAIN  optional, defaults to DOMAIN
-# These are variables, not secrets: none is a credential. The role ARN reveals
-# the account ID, so the workflow masks both.
+# - <environment> holds only the deploy role, so the configuration lives in one
+#   place. prod needs required reviewers, so every prod apply waits for approval.
+#     AWS_ROLE_ARN        github_deploy_role_arn output
+# These are variables, not secrets: none is a credential. The role ARNs reveal
+# the account ID, so the workflow masks it.
 #
 # A plan that destroys or replaces anything other than Lambda resources stops
 # the run before apply. There is no override: such changes are applied by hand.
@@ -67,45 +88,64 @@ on:
 permissions:
   contents: read
 
-# One run per environment at a time. A running apply is never cancelled, since
-# that would leave the state locked and resources half changed.
+# One run per environment at a time, including while an apply waits for
+# approval. A running apply is never cancelled, since that would leave the
+# state locked and resources half changed.
 concurrency:
   group: deploy-${{ inputs.environment }}
   cancel-in-progress: false
 
 # Third-party actions are pinned to commit SHAs, not tags, because tags can be moved.
 
+# Inputs reach scripts only through the environment, never inlined, so a
+# crafted value can't inject shell code.
+env:
+  ENVIRONMENT: ${{ inputs.environment }}
+  ACTION: ${{ inputs.action }}
+  TF_DIR: terraform/environments/${{ inputs.environment }}
+  PACKAGE: serverless-api/dist/function.zip
+  PACKAGE_KEY: ${{ inputs.environment }}/function.zip
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
 jobs:
-  deploy:
-    name: ${{ inputs.action }} ${{ inputs.environment }}
-    # The deploy roles trust the GitHub environment, not the branch, so this and
-    # the environment's branch rule keep other branches from deploying.
+  plan:
+    name: plan ${{ inputs.environment }}
+    # The roles trust the GitHub environment, not the branch, so this and the
+    # environments' branch rule keep other branches from deploying. apply needs
+    # this job, so it is skipped too.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
-    timeout-minutes: 90
+    environment: ${{ inputs.environment }}-plan
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
+      attestations: read
     defaults:
       run:
         shell: bash
-    # Inputs reach scripts only through the environment, never inlined, so a
-    # crafted value can't inject shell code.
     env:
-      ENVIRONMENT: ${{ inputs.environment }}
-      ACTION: ${{ inputs.action }}
       VERSION: ${{ inputs.version }}
-      TF_DIR: terraform/environments/${{ inputs.environment }}
-      PACKAGE: serverless-api/dist/function.zip
-      PACKAGE_KEY: ${{ inputs.environment }}/function.zip
       ARTIFACTS_BUCKET: ${{ vars.ARTIFACTS_BUCKET }}
-      TF_IN_AUTOMATION: "true"
-      TF_INPUT: "false"
+    # None of these holds the account ID, so GitHub passes them on to apply.
+    outputs:
+      tf_env: ${{ steps.config.outputs.tf_env }}
+      region: ${{ vars.AWS_REGION }}
+      state_bucket: ${{ vars.TF_STATE_BUCKET }}
+      artifacts_bucket: ${{ vars.ARTIFACTS_BUCKET }}
+      domain: ${{ vars.DOMAIN }}
+      package_sha256: ${{ steps.package.outputs.sha256 }}
+      rollback_version_id: ${{ steps.rollback.outputs.version_id }}
+      rollback_commit: ${{ steps.rollback.outputs.commit }}
+      rollback_is_current: ${{ steps.rollback.outputs.is_current }}
+      changes: ${{ steps.plan.outputs.changes }}
+      changed_resources: ${{ steps.plan.outputs.changed_resources }}
     steps:
       - name: Mask the account ID and check the configuration
+        id: config
         env:
-          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          AWS_PLAN_ROLE_ARN: ${{ vars.AWS_PLAN_ROLE_ARN }}
           AWS_REGION: ${{ vars.AWS_REGION }}
           TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
           CIDR_BLOCK: ${{ vars.CIDR_BLOCK }}
@@ -116,30 +156,33 @@ jobs:
           CERTIFICATE_DOMAIN: ${{ vars.CERTIFICATE_DOMAIN }}
         run: |
           # Masked before any later step logs its inputs.
-          account_id="$(cut -d: -f5 <<< "$AWS_ROLE_ARN")"
+          account_id="$(cut -d: -f5 <<< "$AWS_PLAN_ROLE_ARN")"
           if [[ -n "$account_id" ]]; then
             echo "::add-mask::$account_id"
-            echo "::add-mask::$AWS_ROLE_ARN"
+            echo "::add-mask::$AWS_PLAN_ROLE_ARN"
           fi
 
           missing=()
-          for name in AWS_ROLE_ARN TF_STATE_BUCKET ARTIFACTS_BUCKET AWS_REGION CIDR_BLOCK PRIVATE_SUBNETS API_STAGE DOMAIN; do
+          for name in AWS_PLAN_ROLE_ARN TF_STATE_BUCKET ARTIFACTS_BUCKET AWS_REGION CIDR_BLOCK PRIVATE_SUBNETS API_STAGE DOMAIN; do
             [[ -n "${!name}" ]] || missing+=("$name")
           done
           if (( ${#missing[@]} > 0 )); then
-            echo "::error::Missing variables in the $ENVIRONMENT environment: ${missing[*]}"
+            echo "::error::Missing variables in the $ENVIRONMENT-plan environment: ${missing[*]}"
             exit 1
           fi
-          if [[ ! "$AWS_ROLE_ARN" =~ ^arn:aws:iam::[0-9]{12}:role/github-deploy-${ENVIRONMENT}$ ]]; then
-            echo "::error::AWS_ROLE_ARN is not the github-deploy-$ENVIRONMENT role."
+          if [[ ! "$AWS_PLAN_ROLE_ARN" =~ ^arn:aws:iam::[0-9]{12}:role/github-plan-${ENVIRONMENT}$ ]]; then
+            echo "::error::AWS_PLAN_ROLE_ARN is not the github-plan-$ENVIRONMENT role."
             exit 1
           fi
+          # Not in tf_env: GitHub drops job outputs that contain a masked value,
+          # so apply takes it from its own role ARN.
+          echo "TF_VAR_aws_account_id=$account_id" >> "$GITHUB_ENV"
           if [[ "$ACTION" == rollback && ! "$VERSION" =~ ^(previous|[0-9a-f]{7,40})$ ]]; then
             echo "::error::version must be \"previous\" or a commit SHA of at least 7 characters."
             exit 1
           fi
 
-          {
+          tf_env="$(
             echo "TF_VAR_region=$AWS_REGION"
             echo "TF_VAR_cidr_block=$CIDR_BLOCK"
             echo "TF_VAR_private_subnets=$PRIVATE_SUBNETS"
@@ -148,7 +191,15 @@ jobs:
             # Optional: left unset, so Terraform uses its null default.
             if [[ -n "$HOSTED_ZONE_NAME" ]]; then echo "TF_VAR_hosted_zone_name=$HOSTED_ZONE_NAME"; fi
             if [[ -n "$CERTIFICATE_DOMAIN" ]]; then echo "TF_VAR_certificate_domain=$CERTIFICATE_DOMAIN"; fi
-          } >> "$GITHUB_ENV"
+          )"
+          echo "$tf_env" >> "$GITHUB_ENV"
+          # A random delimiter, so no value can end the output early.
+          delimiter="EOF_$(openssl rand -hex 16)"
+          {
+            echo "tf_env<<$delimiter"
+            echo "$tf_env"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -175,70 +226,13 @@ jobs:
           mkdir -p dist
           rm -f dist/function.zip
           find "${contents[@]}" | LC_ALL=C sort | zip -X -q dist/function.zip -@
-          echo "Package SHA-256: $(sha256sum dist/function.zip | cut -d' ' -f1)"
 
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          role-session-name: github-${{ inputs.action }}-${{ inputs.environment }}-${{ github.run_id }}
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          role-session-name: github-plan-${{ inputs.environment }}-${{ github.run_id }}
           aws-region: ${{ vars.AWS_REGION }}
           mask-aws-account-id: true
-
-      # Each deploy is a version of the same key, so the earlier packages are
-      # its noncurrent versions, newest first.
-      - name: Fetch the rollback package
-        id: rollback
-        if: inputs.action == 'rollback'
-        run: |
-          versions="$(aws s3api list-object-versions --bucket "$ARTIFACTS_BUCKET" --prefix "$PACKAGE_KEY" --output json \
-            | jq -c --arg key "$PACKAGE_KEY" '[.Versions // [] | .[] | select(.Key == $key)] | sort_by(.LastModified) | reverse')"
-          count="$(jq length <<< "$versions")"
-          if (( count < 2 )); then
-            echo "::error::No earlier package of $ENVIRONMENT to roll back to."
-            exit 1
-          fi
-
-          metadata() {
-            aws s3api head-object --bucket "$ARTIFACTS_BUCKET" --key "$PACKAGE_KEY" --version-id "$1" --query Metadata --output json
-          }
-
-          # Index 0 is the package deployed now.
-          target=""
-          if [[ "$VERSION" == previous ]]; then
-            target="$(jq -r '.[1].VersionId' <<< "$versions")"
-          else
-            current_commit="$(metadata "$(jq -r '.[0].VersionId' <<< "$versions")" | jq -r '.commit // ""')"
-            if [[ "$current_commit" == "$VERSION"* ]]; then
-              echo "::error::$VERSION is the package deployed now."
-              exit 1
-            fi
-            for id in $(jq -r '.[1:][].VersionId' <<< "$versions"); do
-              if [[ "$(metadata "$id" | jq -r '.commit // ""')" == "$VERSION"* ]]; then
-                target="$id"
-                break
-              fi
-            done
-            if [[ -z "$target" ]]; then
-              echo "::error::No kept package of $ENVIRONMENT comes from commit $VERSION."
-              exit 1
-            fi
-          fi
-
-          meta="$(metadata "$target")"
-          commit="$(jq -r '.commit // "unknown"' <<< "$meta")"
-          expected="$(jq -r '.sha256 // ""' <<< "$meta")"
-
-          mkdir -p "$(dirname "$PACKAGE")"
-          aws s3api get-object --bucket "$ARTIFACTS_BUCKET" --key "$PACKAGE_KEY" --version-id "$target" "$PACKAGE" > /dev/null
-          actual="$(sha256sum "$PACKAGE" | cut -d' ' -f1)"
-          if [[ -z "$expected" || "$actual" != "$expected" ]]; then
-            echo "::error::The package of commit $commit doesn't match its recorded SHA-256."
-            exit 1
-          fi
-
-          echo "version_id=$target" >> "$GITHUB_OUTPUT"
-          echo "commit=$commit" >> "$GITHUB_OUTPUT"
-          echo "Rolling back $ENVIRONMENT to the package of commit $commit."
 
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
@@ -255,8 +249,105 @@ jobs:
           -backend-config="bucket=$TF_STATE_BUCKET"
           -backend-config="region=$AWS_REGION"
 
-      # The plan file holds the state's values, so it never leaves the runner:
-      # plan and apply run in the same job, and it is not uploaded.
+      # Each kept package is a version of the same key, newest first. The
+      # current version isn't always the package running now: a deploy that
+      # fails the smoke test stays deployed but is never kept. So the choice
+      # is made against the API Lambda's code hash, not the current version.
+      - name: Fetch the rollback package
+        id: rollback
+        if: inputs.action == 'rollback'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          function_name="$(terraform -chdir="$TF_DIR" output -raw api_function_name)"
+          # Lambda reports the zip's SHA-256 in base64, the metadata in hex.
+          deployed="$(aws lambda get-function-configuration --function-name "$function_name" \
+            --query CodeSha256 --output text | base64 -d | od -An -v -tx1 | tr -d ' \n')"
+          if [[ ! "$deployed" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not read the code hash of the API Lambda of $ENVIRONMENT."
+            exit 1
+          fi
+
+          versions="$(aws s3api list-object-versions --bucket "$ARTIFACTS_BUCKET" --prefix "$PACKAGE_KEY" --output json \
+            | jq -c --arg key "$PACKAGE_KEY" '[.Versions // [] | .[] | select(.Key == $key)] | sort_by(.LastModified) | reverse')"
+
+          metadata() {
+            aws s3api head-object --bucket "$ARTIFACTS_BUCKET" --key "$PACKAGE_KEY" --version-id "$1" --query Metadata --output json
+          }
+
+          # The metadata only picks the package. Anyone who can write to the
+          # bucket can change it, so the downloaded zip is checked below.
+          target=""
+          for id in $(jq -r '.[].VersionId' <<< "$versions"); do
+            meta="$(metadata "$id")"
+            if [[ "$VERSION" == previous ]]; then
+              if [[ "$(jq -r '.sha256 // ""' <<< "$meta")" != "$deployed" ]]; then
+                target="$id"
+                break
+              fi
+            elif [[ "$(jq -r '.commit // ""' <<< "$meta")" == "$VERSION"* ]]; then
+              target="$id"
+              break
+            fi
+          done
+          if [[ -z "$target" ]]; then
+            if [[ "$VERSION" == previous ]]; then
+              echo "::error::No kept package of $ENVIRONMENT other than the one running now."
+            else
+              echo "::error::No kept package of $ENVIRONMENT comes from commit $VERSION."
+            fi
+            exit 1
+          fi
+
+          commit="$(metadata "$target" | jq -r '.commit // ""')"
+          if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The package to roll back to has no valid commit SHA in its metadata."
+            exit 1
+          fi
+
+          mkdir -p "$(dirname "$PACKAGE")"
+          aws s3api get-object --bucket "$ARTIFACTS_BUCKET" --key "$PACKAGE_KEY" --version-id "$target" "$PACKAGE" > /dev/null
+
+          if [[ "$(sha256sum "$PACKAGE" | cut -d' ' -f1)" == "$deployed" ]]; then
+            echo "::error::The package of commit $commit is the one running now."
+            exit 1
+          fi
+
+          # Anyone who can write to the bucket can replace a package and its
+          # metadata together, so the metadata proves nothing. The attestation
+          # is signed by GitHub and kept outside AWS: it proves this exact zip
+          # was deployed by this workflow, from main, at that commit.
+          if ! gh attestation verify "$PACKAGE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy.yml" \
+            --source-ref refs/heads/main \
+            --source-digest "$commit" \
+            --deny-self-hosted-runners > /dev/null; then
+            echo "::error::The package of commit $commit has no valid attestation from this workflow. It may have been tampered with."
+            exit 1
+          fi
+
+          # After a failed smoke test the package to restore can already be
+          # the current version, and copying it again would push an earlier
+          # package out of the kept versions.
+          if [[ "$target" == "$(jq -r '.[0].VersionId' <<< "$versions")" ]]; then
+            echo "is_current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_current=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version_id=$target" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "Rolling back $ENVIRONMENT to the package of commit $commit."
+
+      - name: Hash the package
+        id: package
+        run: |
+          sha="$(sha256sum "$PACKAGE" | cut -d' ' -f1)"
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "Package SHA-256: $sha"
+
+      # The plan file holds the state's values, so it never leaves the runner
+      # and is not uploaded. apply plans again instead.
       - name: Terraform plan
         id: plan
         env:
@@ -272,17 +363,27 @@ jobs:
             *) exit "$code" ;;
           esac
 
+          # Sorted, so apply can compare its own plan with this one line by line.
+          changed="$(terraform -chdir="$TF_DIR" show -json tfplan \
+            | jq -r '.resource_changes // [] | .[] | select(.change.actions != ["no-op"]) | "\(.change.actions | join("/")) \(.address)"' \
+            | LC_ALL=C sort)"
+          delimiter="EOF_$(openssl rand -hex 16)"
+          {
+            echo "changed_resources<<$delimiter"
+            echo "$changed"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
           {
             echo "### $ACTION $ENVIRONMENT"
             if [[ "$ACTION" == rollback ]]; then
               echo "Package of commit \`$ROLLBACK_COMMIT\`."
             fi
             if [[ "$code" == 0 ]]; then
-              echo "No changes."
+              echo "No changes, so there is nothing to apply."
             else
               echo '```'
-              terraform -chdir="$TF_DIR" show -json tfplan \
-                | jq -r '.resource_changes[] | select(.change.actions != ["no-op"]) | "\(.change.actions | join("/")) \(.address)"'
+              echo "$changed"
               echo '```'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
@@ -310,35 +411,206 @@ jobs:
             fi
           fi
 
+      # The package holds only code and the public RDS CA bundle, no secrets.
+      # It is kept for a week, so an approval given within a week can still
+      # apply it. A later approval fails, and the deploy has to be started again.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.plan.outputs.changes == 'true'
+        with:
+          name: lambda-package
+          path: ${{ env.PACKAGE }}
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Remove the plan
+        if: always()
+        run: rm -f "$TF_DIR/tfplan"
+
+  apply:
+    name: ${{ inputs.action }} ${{ inputs.environment }}
+    needs: plan
+    if: needs.plan.outputs.changes == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    # Also the AWS session length (role-duration-seconds and the role's
+    # max_session_duration): change all three together.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      ARTIFACTS_BUCKET: ${{ needs.plan.outputs.artifacts_bucket }}
+      PACKAGE_SHA256: ${{ needs.plan.outputs.package_sha256 }}
+    steps:
+      - name: Mask the account ID and check the configuration
+        env:
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          TF_ENV: ${{ needs.plan.outputs.tf_env }}
+        run: |
+          # Masked before any later step logs its inputs.
+          account_id="$(cut -d: -f5 <<< "$AWS_ROLE_ARN")"
+          if [[ -n "$account_id" ]]; then
+            echo "::add-mask::$account_id"
+            echo "::add-mask::$AWS_ROLE_ARN"
+          fi
+
+          if [[ ! "$AWS_ROLE_ARN" =~ ^arn:aws:iam::[0-9]{12}:role/github-deploy-${ENVIRONMENT}$ ]]; then
+            echo "::error::AWS_ROLE_ARN in the $ENVIRONMENT environment is not the github-deploy-$ENVIRONMENT role."
+            exit 1
+          fi
+          echo "TF_VAR_aws_account_id=$account_id" >> "$GITHUB_ENV"
+
+          # The configuration was checked by plan, in the $ENVIRONMENT-plan environment.
+          echo "$TF_ENV" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The same package plan used, checked against the hash plan reported.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: lambda-package
+          path: serverless-api/dist
+
+      - name: Check the package
+        run: |
+          actual="$(sha256sum "$PACKAGE" | cut -d' ' -f1)"
+          if [[ "$actual" != "$PACKAGE_SHA256" ]]; then
+            echo "::error::The package doesn't match the one plan used."
+            exit 1
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: github-${{ inputs.action }}-${{ inputs.environment }}-${{ github.run_id }}
+          aws-region: ${{ needs.plan.outputs.region }}
+          mask-aws-account-id: true
+          # As long as the job timeout, and no longer than the role's maximum.
+          role-duration-seconds: 5400
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.17.1
+          terraform_wrapper: false
+
+      - name: Terraform init
+        env:
+          TF_STATE_BUCKET: ${{ needs.plan.outputs.state_bucket }}
+          AWS_REGION: ${{ needs.plan.outputs.region }}
+        run: >
+          terraform -chdir="$TF_DIR" init -lockfile=readonly
+          -backend-config="bucket=$TF_STATE_BUCKET"
+          -backend-config="region=$AWS_REGION"
+
+      # The approved plan's file stayed on the plan runner, so this plans again
+      # and applies only if the same resources change in the same way. It
+      # catches resources added, removed or acted on differently since the
+      # approval, not a different value within the same update.
+      - name: Terraform plan and compare
+        env:
+          APPROVED: ${{ needs.plan.outputs.changed_resources }}
+        run: |
+          terraform -chdir="$TF_DIR" plan -lock-timeout=5m -no-color -out=tfplan > /dev/null
+          changed="$(terraform -chdir="$TF_DIR" show -json tfplan \
+            | jq -r '.resource_changes // [] | .[] | select(.change.actions != ["no-op"]) | "\(.change.actions | join("/")) \(.address)"' \
+            | LC_ALL=C sort)"
+          if [[ "$changed" != "$APPROVED" ]]; then
+            {
+              echo "#### Stopped: the plan changed after approval"
+              echo '```'
+              diff <(echo "$APPROVED") <(echo "$changed") || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::The plan no longer matches the approved one. See the job summary, then start the deploy again."
+            exit 1
+          fi
+          echo "The plan matches the approved one."
+
       # The apply output ends with every Terraform output, so it is discarded.
       - name: Terraform apply
-        if: steps.plan.outputs.changes == 'true'
         run: terraform -chdir="$TF_DIR" apply -lock-timeout=5m -no-color tfplan > /dev/null
 
-      # Runs only after a successful apply, so the current version is always
-      # the package that is deployed. An unchanged package isn't uploaded again,
+      # Goes through the custom domain, so it covers DNS, the certificate, API
+      # Gateway and the Lambda. /healthz doesn't touch the database, so
+      # /product/0 must return 404: a 500 means the Lambda can't reach Aurora.
+      # Retried for about two minutes, to allow for cold starts. Only status
+      # codes are logged, never response bodies.
+      - name: Smoke test
+        env:
+          DOMAIN: ${{ needs.plan.outputs.domain }}
+        run: |
+          check() {
+            local path="$1" expected="$2" code=""
+            for _ in $(seq 1 12); do
+              code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$DOMAIN$path" || true)"
+              if [[ "$code" == "$expected" ]]; then
+                echo "GET $path returned $code."
+                return 0
+              fi
+              sleep 10
+            done
+            echo "::error::GET $path returned $code, expected $expected."
+            return 1
+          }
+
+          if ! { check /healthz 200 && check /product/0 404; }; then
+            {
+              echo "#### Smoke test failed"
+              if [[ "$ACTION" == deploy ]]; then
+                echo "The new package is running but was not kept. Run a rollback with version \`previous\`."
+              else
+                echo "The rolled back package is running but was not marked as current. Roll back to another version, or deploy a fix."
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      # Runs only after a successful apply and smoke test, so every kept package
+      # worked when it was deployed. An unchanged package isn't uploaded again,
       # since it would push an earlier package out of the kept versions.
-      - name: Keep the deployed package
+      - name: Check whether the package is new
+        id: kept
         if: inputs.action == 'deploy'
         run: |
-          sha="$(sha256sum "$PACKAGE" | cut -d' ' -f1)"
           current="$(aws s3api head-object --bucket "$ARTIFACTS_BUCKET" --key "$PACKAGE_KEY" \
             --query Metadata.sha256 --output text 2> /dev/null || true)"
-          if [[ "$current" == "$sha" ]]; then
+          if [[ "$current" == "$PACKAGE_SHA256" ]]; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
             echo "The deployed package is already the current version."
           else
-            aws s3 cp "$PACKAGE" "s3://$ARTIFACTS_BUCKET/$PACKAGE_KEY" \
-              --metadata "commit=$GITHUB_SHA,sha256=$sha" --only-show-errors
-            echo "Kept the package of commit $GITHUB_SHA."
+            echo "new=true" >> "$GITHUB_OUTPUT"
           fi
+
+      # Signed before the upload, so every kept package has an attestation and
+      # a rollback can verify it. The attestation binds the zip's SHA-256 to
+      # this repository, workflow, ref and commit, and lives in GitHub, out of
+      # reach of anyone who can write to the bucket.
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        if: steps.kept.outputs.new == 'true'
+        with:
+          subject-path: ${{ env.PACKAGE }}
+
+      - name: Keep the deployed package
+        if: steps.kept.outputs.new == 'true'
+        run: |
+          aws s3 cp "$PACKAGE" "s3://$ARTIFACTS_BUCKET/$PACKAGE_KEY" \
+            --metadata "commit=$GITHUB_SHA,sha256=$PACKAGE_SHA256" --only-show-errors
+          echo "Kept the package of commit $GITHUB_SHA."
 
       # Copying the earlier version makes it current again, so the history
       # stays linear and the rollback itself can be rolled back.
       - name: Mark the rolled back package as current
-        if: inputs.action == 'rollback'
+        if: inputs.action == 'rollback' && needs.plan.outputs.rollback_is_current != 'true'
         env:
-          VERSION_ID: ${{ steps.rollback.outputs.version_id }}
-          ROLLBACK_COMMIT: ${{ steps.rollback.outputs.commit }}
+          VERSION_ID: ${{ needs.plan.outputs.rollback_version_id }}
+          ROLLBACK_COMMIT: ${{ needs.plan.outputs.rollback_commit }}
         run: |
           aws s3api copy-object --bucket "$ARTIFACTS_BUCKET" --key "$PACKAGE_KEY" \
             --copy-source "$ARTIFACTS_BUCKET/$PACKAGE_KEY?versionId=$VERSION_ID" \

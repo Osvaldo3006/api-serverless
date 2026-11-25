@@ -16,6 +16,8 @@ name: Deploy
 #           Terraform from main with it. version is "previous" (the package
 #           that was current before this one) or the commit SHA of a deploy. The bucket always keeps the two most recent
 #           earlier packages, and older ones for 60 days after being replaced.
+#           Each kept package has a GitHub attestation, and a rollback refuses
+#           a package whose attestation doesn't verify.
 #
 # A rollback restores the code of both Lambdas, not the infrastructure or the
 # database schema: migrations only move forward, so the migrator finds nothing
@@ -111,6 +113,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      attestations: read
     defaults:
       run:
         shell: bash
@@ -226,6 +229,8 @@ jobs:
       - name: Fetch the rollback package
         id: rollback
         if: inputs.action == 'rollback'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           versions="$(aws s3api list-object-versions --bucket "$ARTIFACTS_BUCKET" --prefix "$PACKAGE_KEY" --output json \
             | jq -c --arg key "$PACKAGE_KEY" '[.Versions // [] | .[] | select(.Key == $key)] | sort_by(.LastModified) | reverse')"
@@ -261,15 +266,26 @@ jobs:
             fi
           fi
 
-          meta="$(metadata "$target")"
-          commit="$(jq -r '.commit // "unknown"' <<< "$meta")"
-          expected="$(jq -r '.sha256 // ""' <<< "$meta")"
+          commit="$(metadata "$target" | jq -r '.commit // ""')"
+          if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The package to roll back to has no valid commit SHA in its metadata."
+            exit 1
+          fi
 
           mkdir -p "$(dirname "$PACKAGE")"
           aws s3api get-object --bucket "$ARTIFACTS_BUCKET" --key "$PACKAGE_KEY" --version-id "$target" "$PACKAGE" > /dev/null
-          actual="$(sha256sum "$PACKAGE" | cut -d' ' -f1)"
-          if [[ -z "$expected" || "$actual" != "$expected" ]]; then
-            echo "::error::The package of commit $commit doesn't match its recorded SHA-256."
+
+          # Anyone who can write to the bucket can replace a package and its
+          # metadata together, so the metadata proves nothing. The attestation
+          # is signed by GitHub and kept outside AWS: it proves this exact zip
+          # was deployed by this workflow, from main, at that commit.
+          if ! gh attestation verify "$PACKAGE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy.yml" \
+            --source-ref refs/heads/main \
+            --source-digest "$commit" \
+            --deny-self-hosted-runners > /dev/null; then
+            echo "::error::The package of commit $commit has no valid attestation from this workflow. It may have been tampered with."
             exit 1
           fi
 
@@ -391,6 +407,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      attestations: write
+      artifact-metadata: write
     defaults:
       run:
         shell: bash
@@ -491,18 +509,34 @@ jobs:
       # Runs only after a successful apply, so the current version is always
       # the package that is deployed. An unchanged package isn't uploaded again,
       # since it would push an earlier package out of the kept versions.
-      - name: Keep the deployed package
+      - name: Check whether the package is new
+        id: kept
         if: inputs.action == 'deploy'
         run: |
           current="$(aws s3api head-object --bucket "$ARTIFACTS_BUCKET" --key "$PACKAGE_KEY" \
             --query Metadata.sha256 --output text 2> /dev/null || true)"
           if [[ "$current" == "$PACKAGE_SHA256" ]]; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
             echo "The deployed package is already the current version."
           else
-            aws s3 cp "$PACKAGE" "s3://$ARTIFACTS_BUCKET/$PACKAGE_KEY" \
-              --metadata "commit=$GITHUB_SHA,sha256=$PACKAGE_SHA256" --only-show-errors
-            echo "Kept the package of commit $GITHUB_SHA."
+            echo "new=true" >> "$GITHUB_OUTPUT"
           fi
+
+      # Signed before the upload, so every kept package has an attestation and
+      # a rollback can verify it. The attestation binds the zip's SHA-256 to
+      # this repository, workflow, ref and commit, and lives in GitHub, out of
+      # reach of anyone who can write to the bucket.
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        if: steps.kept.outputs.new == 'true'
+        with:
+          subject-path: ${{ env.PACKAGE }}
+
+      - name: Keep the deployed package
+        if: steps.kept.outputs.new == 'true'
+        run: |
+          aws s3 cp "$PACKAGE" "s3://$ARTIFACTS_BUCKET/$PACKAGE_KEY" \
+            --metadata "commit=$GITHUB_SHA,sha256=$PACKAGE_SHA256" --only-show-errors
+          echo "Kept the package of commit $GITHUB_SHA."
 
       # Copying the earlier version makes it current again, so the history
       # stays linear and the rollback itself can be rolled back.

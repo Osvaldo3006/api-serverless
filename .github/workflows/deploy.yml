@@ -10,14 +10,22 @@ name: Deploy
 #        It plans again with the deploy role and applies only if the new plan
 #        has the same resource addresses and actions as the approved one.
 #
-# deploy:   builds the Lambda package, applies Terraform, then keeps the package
-#           in the artifacts bucket as <environment>/function.zip.
-# rollback: takes an earlier package from the artifacts bucket and applies
-#           Terraform from main with it. version is "previous" (the package
-#           that was current before this one) or the commit SHA of a deploy. The bucket always keeps the two most recent
+# deploy:   builds the Lambda package, applies Terraform, runs the smoke test,
+#           and only if it passes keeps the package in the artifacts bucket as
+#           <environment>/function.zip.
+# rollback: takes a kept package from the artifacts bucket and applies
+#           Terraform from main with it. version is "previous" (the most
+#           recent kept package other than the one running now) or the commit
+#           SHA of a deploy. The bucket always keeps the two most recent
 #           earlier packages, and older ones for 60 days after being replaced.
 #           Each kept package has a GitHub attestation, and a rollback refuses
 #           a package whose attestation doesn't verify.
+#
+# The smoke test runs after every apply: GET /healthz must return 200 and
+# GET /product/0 must return 404, which needs the API Lambda to reach Aurora.
+# It shows the package worked when deployed, not that it kept working later.
+# A package that fails it stays deployed but is never kept, so the run fails
+# and the fix is a rollback with version "previous".
 #
 # A rollback restores the code of both Lambdas, not the infrastructure or the
 # database schema: migrations only move forward, so the migrator finds nothing
@@ -126,9 +134,11 @@ jobs:
       region: ${{ vars.AWS_REGION }}
       state_bucket: ${{ vars.TF_STATE_BUCKET }}
       artifacts_bucket: ${{ vars.ARTIFACTS_BUCKET }}
+      domain: ${{ vars.DOMAIN }}
       package_sha256: ${{ steps.package.outputs.sha256 }}
       rollback_version_id: ${{ steps.rollback.outputs.version_id }}
       rollback_commit: ${{ steps.rollback.outputs.commit }}
+      rollback_is_current: ${{ steps.rollback.outputs.is_current }}
       changes: ${{ steps.plan.outputs.changes }}
       changed_resources: ${{ steps.plan.outputs.changed_resources }}
     steps:
@@ -224,46 +234,69 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
           mask-aws-account-id: true
 
-      # Each deploy is a version of the same key, so the earlier packages are
-      # its noncurrent versions, newest first.
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.17.1
+          terraform_wrapper: false
+
+      # The lock file is committed, so CI must not change provider versions.
+      - name: Terraform init
+        env:
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: >
+          terraform -chdir="$TF_DIR" init -lockfile=readonly
+          -backend-config="bucket=$TF_STATE_BUCKET"
+          -backend-config="region=$AWS_REGION"
+
+      # Each kept package is a version of the same key, newest first. The
+      # current version isn't always the package running now: a deploy that
+      # fails the smoke test stays deployed but is never kept. So the choice
+      # is made against the API Lambda's code hash, not the current version.
       - name: Fetch the rollback package
         id: rollback
         if: inputs.action == 'rollback'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          versions="$(aws s3api list-object-versions --bucket "$ARTIFACTS_BUCKET" --prefix "$PACKAGE_KEY" --output json \
-            | jq -c --arg key "$PACKAGE_KEY" '[.Versions // [] | .[] | select(.Key == $key)] | sort_by(.LastModified) | reverse')"
-          count="$(jq length <<< "$versions")"
-          if (( count < 2 )); then
-            echo "::error::No earlier package of $ENVIRONMENT to roll back to."
+          function_name="$(terraform -chdir="$TF_DIR" output -raw api_function_name)"
+          # Lambda reports the zip's SHA-256 in base64, the metadata in hex.
+          deployed="$(aws lambda get-function-configuration --function-name "$function_name" \
+            --query CodeSha256 --output text | base64 -d | od -An -v -tx1 | tr -d ' \n')"
+          if [[ ! "$deployed" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not read the code hash of the API Lambda of $ENVIRONMENT."
             exit 1
           fi
+
+          versions="$(aws s3api list-object-versions --bucket "$ARTIFACTS_BUCKET" --prefix "$PACKAGE_KEY" --output json \
+            | jq -c --arg key "$PACKAGE_KEY" '[.Versions // [] | .[] | select(.Key == $key)] | sort_by(.LastModified) | reverse')"
 
           metadata() {
             aws s3api head-object --bucket "$ARTIFACTS_BUCKET" --key "$PACKAGE_KEY" --version-id "$1" --query Metadata --output json
           }
 
-          # Index 0 is the package deployed now.
+          # The metadata only picks the package. Anyone who can write to the
+          # bucket can change it, so the downloaded zip is checked below.
           target=""
-          if [[ "$VERSION" == previous ]]; then
-            target="$(jq -r '.[1].VersionId' <<< "$versions")"
-          else
-            current_commit="$(metadata "$(jq -r '.[0].VersionId' <<< "$versions")" | jq -r '.commit // ""')"
-            if [[ "$current_commit" == "$VERSION"* ]]; then
-              echo "::error::$VERSION is the package deployed now."
-              exit 1
-            fi
-            for id in $(jq -r '.[1:][].VersionId' <<< "$versions"); do
-              if [[ "$(metadata "$id" | jq -r '.commit // ""')" == "$VERSION"* ]]; then
+          for id in $(jq -r '.[].VersionId' <<< "$versions"); do
+            meta="$(metadata "$id")"
+            if [[ "$VERSION" == previous ]]; then
+              if [[ "$(jq -r '.sha256 // ""' <<< "$meta")" != "$deployed" ]]; then
                 target="$id"
                 break
               fi
-            done
-            if [[ -z "$target" ]]; then
-              echo "::error::No kept package of $ENVIRONMENT comes from commit $VERSION."
-              exit 1
+            elif [[ "$(jq -r '.commit // ""' <<< "$meta")" == "$VERSION"* ]]; then
+              target="$id"
+              break
             fi
+          done
+          if [[ -z "$target" ]]; then
+            if [[ "$VERSION" == previous ]]; then
+              echo "::error::No kept package of $ENVIRONMENT other than the one running now."
+            else
+              echo "::error::No kept package of $ENVIRONMENT comes from commit $VERSION."
+            fi
+            exit 1
           fi
 
           commit="$(metadata "$target" | jq -r '.commit // ""')"
@@ -274,6 +307,11 @@ jobs:
 
           mkdir -p "$(dirname "$PACKAGE")"
           aws s3api get-object --bucket "$ARTIFACTS_BUCKET" --key "$PACKAGE_KEY" --version-id "$target" "$PACKAGE" > /dev/null
+
+          if [[ "$(sha256sum "$PACKAGE" | cut -d' ' -f1)" == "$deployed" ]]; then
+            echo "::error::The package of commit $commit is the one running now."
+            exit 1
+          fi
 
           # Anyone who can write to the bucket can replace a package and its
           # metadata together, so the metadata proves nothing. The attestation
@@ -289,6 +327,14 @@ jobs:
             exit 1
           fi
 
+          # After a failed smoke test the package to restore can already be
+          # the current version, and copying it again would push an earlier
+          # package out of the kept versions.
+          if [[ "$target" == "$(jq -r '.[0].VersionId' <<< "$versions")" ]]; then
+            echo "is_current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_current=false" >> "$GITHUB_OUTPUT"
+          fi
           echo "version_id=$target" >> "$GITHUB_OUTPUT"
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "Rolling back $ENVIRONMENT to the package of commit $commit."
@@ -299,21 +345,6 @@ jobs:
           sha="$(sha256sum "$PACKAGE" | cut -d' ' -f1)"
           echo "sha256=$sha" >> "$GITHUB_OUTPUT"
           echo "Package SHA-256: $sha"
-
-      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
-        with:
-          terraform_version: 1.17.1
-          terraform_wrapper: false
-
-      # The lock file is committed, so CI must not change provider versions.
-      - name: Terraform init
-        env:
-          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-          AWS_REGION: ${{ vars.AWS_REGION }}
-        run: >
-          terraform -chdir="$TF_DIR" init -lockfile=readonly
-          -backend-config="bucket=$TF_STATE_BUCKET"
-          -backend-config="region=$AWS_REGION"
 
       # The plan file holds the state's values, so it never leaves the runner
       # and is not uploaded. apply plans again instead.
@@ -506,8 +537,43 @@ jobs:
       - name: Terraform apply
         run: terraform -chdir="$TF_DIR" apply -lock-timeout=5m -no-color tfplan > /dev/null
 
-      # Runs only after a successful apply, so the current version is always
-      # the package that is deployed. An unchanged package isn't uploaded again,
+      # Goes through the custom domain, so it covers DNS, the certificate, API
+      # Gateway and the Lambda. /healthz doesn't touch the database, so
+      # /product/0 must return 404: a 500 means the Lambda can't reach Aurora.
+      # Retried for about two minutes, to allow for cold starts. Only status
+      # codes are logged, never response bodies.
+      - name: Smoke test
+        env:
+          DOMAIN: ${{ needs.plan.outputs.domain }}
+        run: |
+          check() {
+            local path="$1" expected="$2" code=""
+            for _ in $(seq 1 12); do
+              code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$DOMAIN$path" || true)"
+              if [[ "$code" == "$expected" ]]; then
+                echo "GET $path returned $code."
+                return 0
+              fi
+              sleep 10
+            done
+            echo "::error::GET $path returned $code, expected $expected."
+            return 1
+          }
+
+          if ! { check /healthz 200 && check /product/0 404; }; then
+            {
+              echo "#### Smoke test failed"
+              if [[ "$ACTION" == deploy ]]; then
+                echo "The new package is running but was not kept. Run a rollback with version \`previous\`."
+              else
+                echo "The rolled back package is running but was not marked as current. Roll back to another version, or deploy a fix."
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      # Runs only after a successful apply and smoke test, so every kept package
+      # worked when it was deployed. An unchanged package isn't uploaded again,
       # since it would push an earlier package out of the kept versions.
       - name: Check whether the package is new
         id: kept
@@ -541,7 +607,7 @@ jobs:
       # Copying the earlier version makes it current again, so the history
       # stays linear and the rollback itself can be rolled back.
       - name: Mark the rolled back package as current
-        if: inputs.action == 'rollback'
+        if: inputs.action == 'rollback' && needs.plan.outputs.rollback_is_current != 'true'
         env:
           VERSION_ID: ${{ needs.plan.outputs.rollback_version_id }}
           ROLLBACK_COMMIT: ${{ needs.plan.outputs.rollback_commit }}

@@ -530,6 +530,41 @@ resource "aws_iam_role_policy" "github_deploy_iam" {
   })
 }
 
+# The rollback packages are versions of one key, so whoever can delete versions
+# or change the bucket's versioning and lifecycle can erase the rollback
+# history. The workflow only uploads and copies packages, so the deploy role is
+# denied everything else that could remove one. PowerUserAccess grants no IAM
+# and the policy above covers only <project>-<environment>-* roles, so the role
+# can't lift this deny. The bucket's configuration is changed by applying
+# bootstrap with an administrator's credentials.
+resource "aws_iam_role_policy" "github_deploy_protect_artifacts" {
+  name = "protect-artifacts"
+  role = aws_iam_role.github_deploy.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "KeepRollbackHistory"
+        Effect = "Deny"
+        Action = [
+          "s3:DeleteObject",
+          "s3:DeleteObjectVersion",
+          "s3:PutBucketVersioning",
+          "s3:PutLifecycleConfiguration",
+          "s3:PutBucketPolicy",
+          "s3:DeleteBucketPolicy",
+          "s3:DeleteBucket"
+        ]
+        Resource = [
+          aws_s3_bucket.artifacts.arn,
+          "${aws_s3_bucket.artifacts.arn}/*"
+        ]
+      }
+    ]
+  })
+}
+
 # The deploy workflow plans with this role before anyone approves the apply, so
 # it can't change anything. Each role trusts only its own <environment>-plan
 # GitHub environment, which needs no approval.

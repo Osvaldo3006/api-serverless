@@ -530,21 +530,22 @@ resource "aws_iam_role_policy" "github_deploy_iam" {
   })
 }
 
-# The rollback packages are versions of one key, so whoever can delete versions
-# or change the bucket's versioning and lifecycle can erase the rollback
-# history. The workflow only uploads and copies packages, so the deploy role is
-# denied everything else that could remove one. PowerUserAccess grants no IAM
-# and the policy above covers only <project>-<environment>-* roles, so the role
-# can't lift this deny. The bucket's configuration is changed by applying
-# bootstrap with an administrator's credentials.
-resource "aws_iam_role_policy" "github_deploy_protect_artifacts" {
-  name = "protect-artifacts"
+# Both buckets rely on their earlier versions: the rollback packages are
+# versions of one key, and a bad state is recovered from an earlier version.
+# Whoever can delete versions or change a bucket's versioning, lifecycle or
+# policy can erase that history, so the deploy role is denied it. PowerUserAccess
+# grants no IAM and the policy above covers only <project>-<environment>-*
+# roles, so the role can't lift these denies. The buckets' configuration is
+# changed by applying bootstrap with an administrator's credentials.
+resource "aws_iam_role_policy" "github_deploy_protect_buckets" {
+  name = "protect-buckets"
   role = aws_iam_role.github_deploy.id
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
+        # The workflow only uploads and copies packages.
         Sid    = "KeepRollbackHistory"
         Effect = "Deny"
         Action = [
@@ -560,6 +561,35 @@ resource "aws_iam_role_policy" "github_deploy_protect_artifacts" {
           aws_s3_bucket.artifacts.arn,
           "${aws_s3_bucket.artifacts.arn}/*"
         ]
+      },
+      {
+        # The role still overwrites the current state, since that is how
+        # Terraform saves it. The earlier versions stay, so a bad state can be
+        # restored by hand while the lifecycle rule keeps them.
+        Sid    = "KeepStateHistory"
+        Effect = "Deny"
+        Action = [
+          "s3:DeleteObjectVersion",
+          "s3:PutBucketVersioning",
+          "s3:PutLifecycleConfiguration",
+          "s3:PutBucketPolicy",
+          "s3:DeleteBucketPolicy",
+          "s3:DeleteBucket"
+        ]
+        Resource = [
+          aws_s3_bucket.state.arn,
+          "${aws_s3_bucket.state.arn}/*"
+        ]
+      },
+      {
+        # Deleting the state without a version ID hides it behind a delete
+        # marker. Terraform deletes only the lock file next to it, to release
+        # the lock. The key must match the backend key in
+        # terraform/environments/<env>.
+        Sid      = "KeepState"
+        Effect   = "Deny"
+        Action   = "s3:DeleteObject"
+        Resource = "${aws_s3_bucket.state.arn}/${var.environment}/terraform.tfstate"
       }
     ]
   })

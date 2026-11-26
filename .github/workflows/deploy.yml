@@ -278,6 +278,7 @@ jobs:
           # The metadata only picks the package. Anyone who can write to the
           # bucket can change it, so the downloaded zip is checked below.
           target=""
+          matches=()
           for id in $(jq -r '.[].VersionId' <<< "$versions"); do
             meta="$(metadata "$id")"
             if [[ "$VERSION" == previous ]]; then
@@ -285,11 +286,25 @@ jobs:
                 target="$id"
                 break
               fi
-            elif [[ "$(jq -r '.commit // ""' <<< "$meta")" == "$VERSION"* ]]; then
-              target="$id"
-              break
+            else
+              # Every version is checked, so a short SHA that matches packages
+              # of different commits fails instead of picking the newest one.
+              # A rollback copies a package, so one commit can appear twice.
+              commit="$(jq -r '.commit // ""' <<< "$meta")"
+              if [[ "$commit" == "$VERSION"* ]]; then
+                if [[ -z "$target" ]]; then
+                  target="$id"
+                fi
+                if [[ " ${matches[*]} " != *" $commit "* ]]; then
+                  matches+=("$commit")
+                fi
+              fi
             fi
           done
+          if (( ${#matches[@]} > 1 )); then
+            echo "::error::$VERSION matches packages of more than one commit: ${matches[*]}. Use a longer SHA."
+            exit 1
+          fi
           if [[ -z "$target" ]]; then
             if [[ "$VERSION" == previous ]]; then
               echo "::error::No kept package of $ENVIRONMENT other than the one running now."

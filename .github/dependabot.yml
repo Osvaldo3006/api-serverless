@@ -1,5 +1,8 @@
 version: 2
 
+# Version updates wait 7 days after a release, so a compromised version that
+# is found and pulled in that time never reaches a pull request. Security
+# updates, opened for a published advisory, don't wait.
 updates:
   # Actions are pinned to commit SHAs. Dependabot updates the SHA and the
   # version comment next to it, so the pins don't fall behind security fixes.
@@ -7,6 +10,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: ci
 
@@ -14,6 +19,8 @@ updates:
     directory: /serverless-api
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: fix
       prefix-development: chore

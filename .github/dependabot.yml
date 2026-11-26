@@ -1,0 +1,26 @@
+version: 2
+
+updates:
+  # Actions are pinned to commit SHAs. Dependabot updates the SHA and the
+  # version comment next to it, so the pins don't fall behind security fixes.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: npm
+    directory: /serverless-api
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: fix
+      prefix-development: chore
+    # One pull request for minor and patch updates, so they don't pile up.
+    # Major updates still get their own, since they can break the API.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch

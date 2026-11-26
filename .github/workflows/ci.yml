@@ -78,7 +78,9 @@ jobs:
           cache: npm
           cache-dependency-path: serverless-api/package-lock.json
 
-      - run: npm ci
+      # No dependency needs an install script, and skipping them keeps a
+      # compromised package from running code at install time.
+      - run: npm ci --ignore-scripts
 
       # Dev dependencies are not in the Lambda package, and Jest 30 has transitive
       # advisories with no fixed release.

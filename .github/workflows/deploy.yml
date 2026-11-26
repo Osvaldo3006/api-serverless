@@ -54,6 +54,18 @@ name: Deploy
 # These are variables, not secrets: none is a credential. The role ARNs reveal
 # the account ID, so the workflow masks it.
 #
+# One-time setup, for the repository: the roles trust only this workflow, so
+# the OIDC token's sub claim must name it. A repository admin runs, signed in
+# with gh (GitHub exposes this setting only through its API):
+#   gh api -X PUT repos/<owner>/<repo>/actions/oidc/customization/sub \
+#     -F use_default=false \
+#     -f 'include_claim_keys[]=repo' \
+#     -f 'include_claim_keys[]=context' \
+#     -f 'include_claim_keys[]=job_workflow_ref'
+# The sub then reads repo:<owner>/<repo>:environment:<name>:job_workflow_ref:
+# <owner>/<repo>/.github/workflows/deploy.yml@refs/heads/main. It applies to
+# every workflow of the repository. Without it, AWS refuses every run.
+#
 # A plan that destroys or replaces anything other than Lambda resources stops
 # the run before apply. There is no override: such changes are applied by hand.
 #

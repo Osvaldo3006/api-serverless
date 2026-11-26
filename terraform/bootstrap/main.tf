@@ -324,6 +324,13 @@ resource "aws_iam_openid_connect_provider" "github" {
 
 locals {
   account_id = data.aws_caller_identity.current.account_id
+
+  # GitHub's default sub claim names the repository and environment but not
+  # the workflow, so any workflow on main could use the environment. The
+  # repository's OIDC sub is customized to also include job_workflow_ref (see
+  # the header of deploy.yml), and the roles require deploy.yml from main.
+  # Until that is done, the default sub never matches and every run is denied.
+  github_workflow_ref = "job_workflow_ref:${var.github_repository}/.github/workflows/deploy.yml@refs/heads/main"
 }
 
 # Caps what any role a deploy role creates can do, whatever policies it holds,
@@ -405,8 +412,8 @@ resource "aws_iam_policy" "lambda_boundary" {
   })
 }
 
-# Each role trusts only workflow jobs that run in its own GitHub environment of
-# this repository, so a dev job can't assume the prod role.
+# Each role trusts only deploy.yml from main, in jobs that run in its own GitHub
+# environment of this repository, so a dev job can't assume the prod role.
 resource "aws_iam_role" "github_deploy" {
   name = "github-deploy-${var.environment}"
 
@@ -424,7 +431,7 @@ resource "aws_iam_role" "github_deploy" {
         Condition = {
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:environment:${var.environment}"
+            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:environment:${var.environment}:${local.github_workflow_ref}"
           }
         }
       }
@@ -611,7 +618,7 @@ resource "aws_iam_role" "github_plan" {
         Condition = {
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:environment:${var.environment}-plan"
+            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:environment:${var.environment}-plan:${local.github_workflow_ref}"
           }
         }
       }

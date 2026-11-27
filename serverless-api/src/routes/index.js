@@ -44,6 +44,6 @@ router.all("/product/:productId", methodNotAllowed);
 router.all("/product/:productId/image", methodNotAllowed);
 router.all("/product/:productId/image/:imageId", methodNotAllowed);
 
-router.all("*", (req, res) => res.sendStatus(404));
+router.all("/{*splat}", (req, res) => res.sendStatus(404));
 
 module.exports = router;
